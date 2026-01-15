@@ -700,6 +700,229 @@ print(df_lifecycle[BUCKETS_CANON] / df_lifecycle[BUCKETS_CANON].sum(axis=1))
 
 ---
 
+---
+
+## 🔧 SCALING: Điều chỉnh allocation để match với lifecycle (calibrated)
+
+### Vấn đề
+
+Khi forecast lifecycle, chúng ta áp dụng **calibration** (hệ số k per MOB) để điều chỉnh transition matrix. Tuy nhiên, khi allocation ngược lại từ lifecycle xuống loan-level, nếu dùng transition matrix gốc (chưa calibrated), sẽ có **mismatch** giữa:
+
+- **Tổng EAD theo state từ allocation** (dùng transition matrix gốc)
+- **Tổng EAD theo state từ lifecycle** (đã calibrated)
+
+### Giải pháp: Scaling
+
+Tính **scaling factor** cho mỗi (product, score, vintage, state) để điều chỉnh EAD_FORECAST:
+
+```python
+scaling_factor = EAD_lifecycle[state] / EAD_allocated[state]
+EAD_FORECAST_SCALED = EAD_FORECAST × scaling_factor
+```
+
+### Workflow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Allocation với transition matrix                        │
+│     → STATE_FORECAST, EAD_FORECAST (raw)                    │
+├─────────────────────────────────────────────────────────────┤
+│  2. Tính scaling factor per (cohort × state)                │
+│     scaling_factor = EAD_lifecycle / EAD_allocated          │
+├─────────────────────────────────────────────────────────────┤
+│  3. Apply scaling                                           │
+│     EAD_FORECAST_SCALED = EAD_FORECAST × scaling_factor     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Code sử dụng
+
+```python
+from src.rollrate.allocation_v2 import allocate_with_calibration_scaling
+
+# Allocation với scaling
+df_result = allocate_with_calibration_scaling(
+    df_loans_latest=df_loans,
+    df_lifecycle_final=df_lifecycle_final,  # Đã calibrated
+    matrices_by_mob=matrices_by_mob,
+    target_mob=12,
+    seed=42
+)
+
+# Output có thêm cột:
+# - SCALING_FACTOR: Hệ số scale
+# - EAD_FORECAST_SCALED: EAD đã scale
+```
+
+### Multi-MOB với scaling
+
+```python
+from src.rollrate.allocation_v2 import allocate_multi_mob_with_scaling
+
+df_result = allocate_multi_mob_with_scaling(
+    df_loans_latest=df_loans,
+    df_lifecycle_final=df_lifecycle_final,
+    matrices_by_mob=matrices_by_mob,
+    target_mobs=[12, 24],
+    include_del30=True,
+    include_del90=True,
+    seed=42
+)
+
+# Output columns:
+# - EAD_FORECAST_MOB12, EAD_SCALED_MOB12, SCALING_FACTOR_MOB12
+# - EAD_FORECAST_MOB24, EAD_SCALED_MOB24, SCALING_FACTOR_MOB24
+# - DEL30_FLAG_MOB12, DEL90_FLAG_MOB12
+# - DEL30_FLAG_MOB24, DEL90_FLAG_MOB24
+```
+
+### Validation
+
+Sau khi scale, kiểm tra:
+
+```python
+# Tổng EAD scaled phải gần khớp với lifecycle
+total_scaled = df_result['EAD_FORECAST_SCALED'].sum()
+total_lifecycle = df_lifecycle[BUCKETS_CANON].sum().sum()
+
+diff_pct = abs(total_scaled - total_lifecycle) / total_lifecycle * 100
+print(f"Diff: {diff_pct:.2f}%")  # Nên < 1%
+```
+
+---
+
+## 📊 BACKTEST: So sánh forecast với actual
+
+### Mục đích
+
+Đánh giá độ chính xác của allocation bằng cách so sánh:
+- **STATE_FORECAST** vs **STATE_ACTUAL**
+- **EAD_FORECAST** vs **EAD_ACTUAL**
+
+### Backtest State
+
+```python
+from src.rollrate.allocation_v2 import backtest_allocation
+
+df_compare = backtest_allocation(
+    df_allocated=df_allocated,
+    df_actual=df_actual,  # Dữ liệu actual tại target_mob
+    target_mob=12
+)
+
+# Output:
+# - Accuracy (exact match)
+# - DEL30 accuracy
+# - DEL90 accuracy
+# - Confusion matrix (TP, FP, FN, TN)
+# - Precision, Recall, F1 Score
+```
+
+### Backtest EAD
+
+```python
+from src.rollrate.allocation_v2 import backtest_ead
+
+df_compare = backtest_ead(
+    df_allocated=df_allocated,
+    df_actual=df_actual,
+    target_mob=12,
+    ead_col_forecast='EAD_FORECAST_SCALED'
+)
+
+# Output:
+# - Total EAD (Forecast vs Actual)
+# - MAE (Mean Absolute Error)
+# - MAPE (Mean Absolute Percentage Error)
+# - R² (R-squared)
+```
+
+### Backtest theo cohort
+
+```python
+from src.rollrate.allocation_v2 import backtest_allocation_by_cohort
+
+df_results = backtest_allocation_by_cohort(
+    df_allocated=df_allocated,
+    df_actual=df_actual,
+    target_mob=12
+)
+
+# Output: Metrics theo từng cohort (Product × Risk × Vintage)
+# - DEL90_FORECAST, DEL90_ACTUAL, DEL90_DIFF, DEL90_ACCURACY
+```
+
+### Ví dụ output backtest
+
+```
+📊 BACKTEST @ MOB 12
+============================================================
+   Số loans so sánh: 10,000
+   Accuracy (exact match): 65.00%
+   DEL30 accuracy: 85.00%
+   DEL90 accuracy: 90.00%
+
+📊 DEL90 Confusion Matrix:
+                    Actual
+                    DEL90=1    DEL90=0
+   Forecast DEL90=1      500        100  (TP, FP)
+   Forecast DEL90=0       50      9,350  (FN, TN)
+
+📊 DEL90 Metrics:
+   Precision: 83.33%
+   Recall: 90.91%
+   F1 Score: 86.96%
+
+📊 DEL90 Rates:
+   Forecast: 6.00%
+   Actual: 5.50%
+   Diff: +0.50%
+```
+
+---
+
+## 📚 Tài liệu liên quan
+
+- **FIX_EAD_FORECAST_LOGIC.md** - Chi tiết về fix EAD_FORECAST
+- **test_ead_forecast_fix.py** - Test script
+- **test_allocation_scaling_backtest.py** - Test scaling và backtest
+- **QUICK_GUIDE_MULTI_MOB.md** - Hướng dẫn nhanh multi-MOB
+- **GUIDE_LAY_CHI_TIET_HOP_DONG.md** - Hướng dẫn lấy chi tiết hợp đồng
+- **RESEARCH_ALLOCATION_METHODS.md** - So sánh các phương pháp allocation
+
+---
+
+## 🎓 Tóm tắt
+
+### Logic cốt lõi (3 bước)
+
+1. **Tính ead_ratio:**
+   ```
+   ead_ratio = Total_EAD_Forecast / Total_EAD_Current
+   ```
+
+2. **Assign state (Transition Matrix):**
+   ```
+   state_probs = apply_transition_matrix(STATE_CURRENT, MOB_CURRENT → TARGET_MOB)
+   STATE_FORECAST = sample(state_probs)
+   ```
+
+3. **Tính EAD_FORECAST:**
+   ```
+   EAD_FORECAST = EAD_CURRENT × (1 - absorbing_prob)
+   EAD_FORECAST_SCALED = EAD_FORECAST × scaling_factor
+   ```
+
+### Điểm quan trọng
+
+✅ **EAD_FORECAST < EAD_CURRENT** (thường xuyên)  
+✅ **Tổng EAD khớp** với lifecycle (sau scaling)  
+✅ **State assignment** dựa trên STATE_CURRENT (transition matrix)  
+✅ **Reproducible** (seed cố định)  
+✅ **Backtest** để đánh giá độ chính xác  
+
+---
+
 **Tác giả:** Roll Rate Model Team  
 **Cập nhật:** 2025-01-15  
-**Version:** 2.0 (sau fix EAD_FORECAST)
+**Version:** 3.0 (thêm scaling và backtest)

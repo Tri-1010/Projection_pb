@@ -372,3 +372,76 @@ df_result = allocate_multi_mob_with_del_metrics(
 
 **Tác giả:** Roll Rate Model Team  
 **Cập nhật:** 2025-01-15
+
+---
+
+## 🔧 NÂNG CAO: Allocation với Scaling (Calibration Consistency)
+
+### Vấn đề
+
+Lifecycle forecast đã apply calibration, nhưng allocation dùng transition matrix gốc → có thể có mismatch.
+
+### Giải pháp: Dùng `allocate_multi_mob_with_scaling()`
+
+```python
+from src.rollrate.allocation_v2 import allocate_multi_mob_with_scaling
+
+df_result = allocate_multi_mob_with_scaling(
+    df_loans_latest=df_loans,
+    df_lifecycle_final=df_lifecycle_final,  # Đã calibrated
+    matrices_by_mob=matrices_by_mob,
+    target_mobs=[12, 24],
+    include_del30=True,
+    include_del90=True,
+    seed=42
+)
+
+# Output có thêm cột:
+# - EAD_SCALED_MOB12, EAD_SCALED_MOB24 (EAD đã scale)
+# - SCALING_FACTOR_MOB12, SCALING_FACTOR_MOB24 (hệ số scale)
+```
+
+### So sánh EAD raw vs scaled
+
+```python
+print(f"EAD raw (MOB 12): {df_result['EAD_FORECAST_MOB12'].sum():,.0f}")
+print(f"EAD scaled (MOB 12): {df_result['EAD_SCALED_MOB12'].sum():,.0f}")
+```
+
+---
+
+## 📊 BACKTEST: Đánh giá độ chính xác
+
+### Backtest State
+
+```python
+from src.rollrate.allocation_v2 import backtest_allocation
+
+df_compare = backtest_allocation(
+    df_allocated=df_allocated,
+    df_actual=df_actual,  # Dữ liệu actual tại target_mob
+    target_mob=12
+)
+
+# Output: Accuracy, Confusion Matrix, Precision, Recall, F1
+```
+
+### Backtest EAD
+
+```python
+from src.rollrate.allocation_v2 import backtest_ead
+
+df_compare = backtest_ead(
+    df_allocated=df_allocated,
+    df_actual=df_actual,
+    target_mob=12,
+    ead_col_forecast='EAD_SCALED_MOB12'
+)
+
+# Output: MAE, MAPE, R²
+```
+
+### Xem chi tiết
+
+- **ALLOCATION_LOGIC_DETAILED.md** - Giải thích chi tiết scaling và backtest
+- **test_allocation_scaling_backtest.py** - Test script
