@@ -425,14 +425,19 @@ def aggregate_to_product(df_del):
     # ===================================================
     # 5️⃣ Aggregate theo Product × Vintage × MOB
     # ===================================================
+    # ✅ Thêm IS_FORECAST vào groupby để giữ lại cột này
+    groupby_cols = ["PRODUCT_TYPE", "VINTAGE_DATE", "MOB"]
+    if "IS_FORECAST" in df.columns:
+        groupby_cols.append("IS_FORECAST")
+    
     agg = (
-        df.groupby(["PRODUCT_TYPE", "VINTAGE_DATE", "MOB"])
+        df.groupby(groupby_cols, as_index=False)
         .apply(lambda g: pd.Series({
             "DEL30_PCT": (g["DEL30_PCT"] * g["WEIGHT"]).sum(),
             "DEL60_PCT": (g["DEL60_PCT"] * g["WEIGHT"]).sum(),
             "DEL90_PCT": (g["DEL90_PCT"] * g["WEIGHT"]).sum(),
             "PRODUCT_DISB": g["PRODUCT_DISB"].iloc[0]   # giữ lại để dễ check
-        }))
+        }), include_groups=False)
         .reset_index()
     )
 
@@ -491,8 +496,13 @@ def aggregate_products_to_portfolio(
     df["WEIGHT_PORT"] = df["PRODUCT_DISB"] / df["PORTFOLIO_DISB"]
 
     # 5️⃣ Aggregate theo Vintage × MOB → portfolio
+    # ✅ Thêm IS_FORECAST vào groupby để giữ lại cột này
+    groupby_cols = ["VINTAGE_DATE", "MOB"]
+    if "IS_FORECAST" in df.columns:
+        groupby_cols.append("IS_FORECAST")
+    
     agg = (
-        df.groupby(["VINTAGE_DATE", "MOB"])
+        df.groupby(groupby_cols, as_index=False)
         .apply(
             lambda g: pd.Series({
                 "DEL30_PCT": (g["DEL30_PCT"] * g["WEIGHT_PORT"]).sum(),
@@ -500,7 +510,7 @@ def aggregate_products_to_portfolio(
                 "DEL90_PCT": (g["DEL90_PCT"] * g["WEIGHT_PORT"]).sum(),
                 # tổng disb portfolio tại cohort (VINTAGE_DATE)
                 "PRODUCT_DISB": g["PORTFOLIO_DISB"].iloc[0],
-            })
+            }), include_groups=False
         )
         .reset_index()
     )
@@ -518,6 +528,9 @@ def aggregate_products_to_portfolio(
         "DEL90_PCT",
         "PRODUCT_DISB",
     ]
+    # ✅ Thêm IS_FORECAST vào cols nếu có
+    if "IS_FORECAST" in agg.columns:
+        cols.append("IS_FORECAST")
     agg = agg[cols]
 
     return agg
