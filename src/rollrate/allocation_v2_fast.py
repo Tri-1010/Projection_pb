@@ -325,16 +325,40 @@ def allocate_multi_mob_fast(
     if 'VINTAGE_DATE' not in df.columns:
         df['VINTAGE_DATE'] = df[CFG['orig_date']].apply(lambda x: x.replace(day=1))
     
-    loan_info = df[[
+    # Các cột cần lấy từ df_loans_latest
+    base_cols = [
         loan_col, 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE',
         CFG["mob"], CFG["ead"], CFG["state"]
-    ]].copy()
+    ]
     
-    loan_info = loan_info.rename(columns={
+    # Thêm DISBURSAL_DATE, DISBURSAL_AMOUNT nếu có
+    orig_date_col = CFG.get("orig_date", "DISBURSAL_DATE")
+    disb_amt_col = CFG.get("disb", "DISBURSAL_AMOUNT")
+    
+    if orig_date_col in df.columns:
+        base_cols.append(orig_date_col)
+    if disb_amt_col in df.columns:
+        base_cols.append(disb_amt_col)
+    
+    # Loại bỏ duplicate columns
+    base_cols = list(dict.fromkeys(base_cols))
+    
+    loan_info = df[[c for c in base_cols if c in df.columns]].copy()
+    
+    # Rename columns
+    rename_map = {
         CFG["mob"]: 'MOB_CURRENT',
         CFG["ead"]: 'EAD_CURRENT',
         CFG["state"]: 'STATE_CURRENT',
-    })
+    }
+    
+    # Rename DISBURSAL columns nếu cần
+    if orig_date_col in loan_info.columns and orig_date_col != 'DISBURSAL_DATE':
+        rename_map[orig_date_col] = 'DISBURSAL_DATE'
+    if disb_amt_col in loan_info.columns and disb_amt_col != 'DISBURSAL_AMOUNT':
+        rename_map[disb_amt_col] = 'DISBURSAL_AMOUNT'
+    
+    loan_info = loan_info.rename(columns=rename_map)
     
     for target_mob in target_mobs:
         print(f"\n{'='*50}")
