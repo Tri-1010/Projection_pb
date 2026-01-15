@@ -42,6 +42,27 @@ Hoặc trong VS Code: Open notebook → Run All Cells
 
 ---
 
+## 📐 Công Thức Quan Trọng (Allocation)
+
+### DEL Rate Calculation
+
+```
+PROB_DEL30 = DEL30_PCT từ lifecycle (KHÔNG tính từ transition matrix)
+EAD_DEL30 = DISBURSAL_AMOUNT × PROB_DEL30
+```
+
+**Giải thích:**
+- `DEL30_PCT` được tính từ lifecycle: `DEL30_AMT / DISB_TOTAL`
+- Khi phân bổ, mỗi loan nhận cùng `PROB_DEL30` = `DEL30_PCT` của cohort
+- **Kết quả:** Tổng `EAD_DEL30 / DISBURSAL_AMOUNT` = `DEL30_PCT` từ lifecycle ✅
+
+**Tại sao KHÔNG tính PROB_DEL30 từ transition matrix?**
+- Lifecycle đã tính sẵn `DEL30_PCT` cho toàn cohort từ MOB=0
+- Nếu tính từ transition matrix cho từng loan (dựa trên STATE_CURRENT), loan đã ở DPD30+ sẽ có PROB cao hơn
+- Kết quả: Tổng không khớp với lifecycle forecast
+
+---
+
 ## ⏱️ Thời Gian Chạy
 
 - **Data nhỏ** (< 100K loans): ~2-3 phút
@@ -86,11 +107,23 @@ Sau khi chạy xong, bạn sẽ có 3 files Excel trong folder `outputs/`:
 
 **Columns:**
 ```
-AGREEMENT_ID | CUSTOMER_ID | PRODUCT_TYPE | RISK_SCORE | VINTAGE_DATE | MOB_CURRENT | EAD_CURRENT |
-STATE_FORECAST_MOB12 | EAD_FORECAST_MOB12 | DEL30_FLAG_MOB12 | DEL90_FLAG_MOB12 |
-STATE_FORECAST_MOB24 | EAD_FORECAST_MOB24 | DEL30_FLAG_MOB24 | DEL90_FLAG_MOB24 |
-... và TẤT CẢ các cột khác từ df_raw (BRANCH_CODE, PRODUCT_NAME, ...)
+AGREEMENT_ID | PRODUCT_TYPE | RISK_SCORE | VINTAGE_DATE | 
+DISBURSAL_DATE | DISBURSAL_AMOUNT |
+MOB_CURRENT | EAD_CURRENT | STATE_CURRENT |
+STATE_FORECAST_MOB12 | EAD_FORECAST_MOB12 | 
+PROB_DEL30_MOB12 | PROB_DEL90_MOB12 |
+EAD_DEL30_MOB12 | EAD_DEL90_MOB12 |
+DEL30_FLAG_MOB12 | DEL90_FLAG_MOB12 |
+STATE_FORECAST_MOB24 | EAD_FORECAST_MOB24 |
+PROB_DEL30_MOB24 | PROB_DEL90_MOB24 |
+EAD_DEL30_MOB24 | EAD_DEL90_MOB24 |
+DEL30_FLAG_MOB24 | DEL90_FLAG_MOB24 |
 ```
+
+**Giải thích các cột:**
+- `PROB_DEL30_MOB{X}`: Tỉ lệ DEL30+ từ lifecycle (= DEL30_PCT của cohort)
+- `EAD_DEL30_MOB{X}`: DISBURSAL_AMOUNT × PROB_DEL30 (dư nợ dự kiến thuộc DEL30+)
+- `DEL30_FLAG_MOB{X}`: 1 nếu STATE_FORECAST ∈ BUCKETS_30P
 
 **📌 Lưu ý quan trọng:**
 - ✅ Chi tiết hợp đồng **ĐÃ CÓ SẴN** trong kết quả allocate

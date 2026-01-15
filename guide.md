@@ -518,221 +518,123 @@ Sau khi có kết quả forecast ở cohort-level (PRODUCT_TYPE × RISK_SCORE ×
 - **Tạo action list** cho collection team
 - **Báo cáo chi tiết** cho regulator
 
-### 2. Hai Phương Pháp Phân Bổ
+### 2. Phương Pháp Phân Bổ (allocation_v2_fast.py)
 
-#### **A. Proportional Allocation (Chi Tiết)**
+#### **Công Thức Quan Trọng**
 
-Mỗi loan nhận EAD từ nhiều states theo tỷ lệ.
+```
+PROB_DEL30 = DEL30_PCT từ lifecycle (KHÔNG tính từ transition matrix)
+EAD_DEL30 = DISBURSAL_AMOUNT × PROB_DEL30
+```
 
-**Ưu điểm:**
-- Giữ nguyên phân phối state từ cohort
-- Tổng EAD khớp 100%
-- Phản ánh đúng uncertainty
+**Giải thích:**
+- `DEL30_PCT` được tính từ lifecycle forecast: `DEL30_AMT / DISB_TOTAL`
+- Khi phân bổ ngược, mỗi loan nhận cùng `PROB_DEL30` = `DEL30_PCT` của cohort
+- `EAD_DEL30 = DISBURSAL_AMOUNT × PROB_DEL30`
+- **Kết quả:** Tổng `EAD_DEL30 / DISBURSAL_AMOUNT` = `DEL30_PCT` từ lifecycle ✅
 
-**Nhược điểm:**
-- Mỗi loan có nhiều dòng (1 dòng per state)
-- Khó visualize
+**Tại sao KHÔNG tính PROB_DEL30 từ transition matrix?**
+- Lifecycle đã tính sẵn `DEL30_PCT` cho toàn cohort từ MOB=0
+- Nếu tính từ transition matrix cho từng loan (dựa trên STATE_CURRENT), loan đã ở DPD30+ sẽ có PROB cao hơn
+- Kết quả: Tổng không khớp với lifecycle forecast
 
-**Code:**
+#### **Output Columns**
+
 ```python
-from src.rollrate.allocation import allocate_forecast_to_loans
+# Per MOB (12, 24):
+- STATE_FORECAST_MOB{X}: State dự báo (sampled từ transition matrix)
+- EAD_FORECAST_MOB{X}: Dư nợ dự báo còn lại
+- PROB_DEL30_MOB{X}: Tỉ lệ DEL30+ từ lifecycle (= DEL30_PCT)
+- PROB_DEL90_MOB{X}: Tỉ lệ DEL90+ từ lifecycle (= DEL90_PCT)
+- EAD_DEL30_MOB{X}: DISBURSAL_AMOUNT × PROB_DEL30
+- EAD_DEL90_MOB{X}: DISBURSAL_AMOUNT × PROB_DEL90
+- DEL30_FLAG_MOB{X}: 1 nếu STATE_FORECAST ∈ DEL30+
+- DEL90_FLAG_MOB{X}: 1 nếu STATE_FORECAST ∈ DEL90+
+```
 
-df_allocated = allocate_forecast_to_loans(
+#### **Code Sử Dụng**
+
+```python
+from src.rollrate.allocation_v2_fast import allocate_multi_mob_fast
+
+df_loan_forecast = allocate_multi_mob_fast(
+    df_loans_latest=df_loans_latest,
     df_lifecycle_final=df_lifecycle_final,
-    df_raw=df_raw,
-    allocation_method="proportional",  # "proportional", "equal", "risk_weighted"
-    forecast_only=True,
+    matrices_by_mob=matrices_by_mob,
+    target_mobs=[12, 24],
+    parent_fallback=parent_fallback,
+    include_del30=True,
+    include_del90=True,
+    seed=42,
 )
 ```
 
-#### **B. Simple Allocation (1 State Per Loan)**
-
-Mỗi loan chỉ được assign vào 1 state duy nhất (Monte Carlo sampling).
-
-**Ưu điểm:**
-- Đơn giản, dễ hiểu
-- Mỗi loan chỉ 1 dòng
-- Dễ tạo action list
-
-**Nhược điểm:**
-- Có yếu tố random (cần set seed)
-- Tổng EAD có thể chênh nhẹ do sampling
-
-**Code:**
-```python
-from src.rollrate.allocation import allocate_forecast_to_loans_simple
-
-df_allocated_simple = allocate_forecast_to_loans_simple(
-    df_lifecycle_final=df_lifecycle_final,
-    df_raw=df_raw,
-    forecast_only=True,
-)
-```
-
-### 3. Validation: Kiểm Tra Tổng EAD
+### 3. Validation: Kiểm Tra Tổng EAD_DEL
 
 ```python
-from src.rollrate.allocation import validate_allocation
+# Kiểm tra DEL30 rate khớp với lifecycle
+total_disbursal = df_loan_forecast['DISBURSAL_AMOUNT'].sum()
+total_ead_del30_mob24 = df_loan_forecast['EAD_DEL30_MOB24'].sum()
 
-compare_df = validate_allocation(
-    df_allocated=df_allocated,
-    df_lifecycle_final=df_lifecycle_final,
-    group_cols=["PRODUCT_TYPE", "RISK_SCORE", "VINTAGE_DATE", "MOB"]
-)
+del30_rate_calc = total_ead_del30_mob24 / total_disbursal
+print(f"DEL30 rate từ allocation: {del30_rate_calc * 100:.2f}%")
 
-# Xem các cohort có lỗi
-errors = compare_df[compare_df["STATUS"] != "OK"]
-print(errors)
+# So sánh với lifecycle
+lifecycle_del30_pct = df_lifecycle_final[df_lifecycle_final['MOB'] == 24]['DEL30_PCT'].mean()
+print(f"DEL30_PCT từ lifecycle: {lifecycle_del30_pct * 100:.2f}%")
+print(f"Khớp: {abs(del30_rate_calc - lifecycle_del30_pct) < 0.001}")
 ```
 
-**Output:**
-```
-📊 Validation Summary:
-OK         1234
-WARNING      12
-ERROR         0
-```
-
-### 4. Enrich: Thêm Thông Tin Bổ Sung
-
-```python
-from src.rollrate.allocation import enrich_loan_forecast
-
-additional_cols = [
-    "CUSTOMER_ID",
-    "CUSTOMER_NAME",
-    "BRANCH_CODE",
-    "PRODUCT_NAME",
-    "LOAN_TERM",
-    "INTEREST_RATE",
-]
-
-df_enriched = enrich_loan_forecast(
-    df_allocated=df_allocated_simple,
-    df_raw=df_raw,
-    additional_cols=additional_cols,
-)
-```
-
-### 5. Use Cases
+### 4. Use Cases
 
 #### **A. Tạo Action List cho Collection Team**
 
 ```python
-# Lọc các loan dự báo sẽ rơi vào DPD90+ tại MOB 12
-high_risk_loans = df_enriched[
-    (df_enriched["MOB"] == 12) &
-    (df_enriched["STATE_FORECAST"].isin(["DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]))
+# Lọc các loan có DEL90 flag = 1 tại MOB 12
+high_risk_loans = df_loan_forecast[
+    df_loan_forecast['DEL90_FLAG_MOB12'] == 1
 ].copy()
 
 # Export cho collection team
 high_risk_loans.to_excel(
     "outputs/High_Risk_Loans_MOB12.xlsx",
     columns=["AGREEMENT_ID", "CUSTOMER_NAME", "BRANCH_CODE", 
-             "STATE_FORECAST", "EAD_FORECAST", "PHONE_NUMBER"],
+             "STATE_FORECAST_MOB12", "EAD_DEL90_MOB12"],
     index=False
 )
 ```
 
-#### **B. Phân Tích Theo Branch**
+#### **B. Phân Tích Theo Cohort**
 
 ```python
-# Tổng EAD rủi ro cao theo branch
-branch_risk = (
-    high_risk_loans.groupby("BRANCH_CODE")["EAD_FORECAST"]
-    .sum()
-    .sort_values(ascending=False)
-)
+# Tính DEL30 rate theo cohort
+cohort_analysis = df_loan_forecast.groupby('VINTAGE_DATE').agg({
+    'DISBURSAL_AMOUNT': 'sum',
+    'EAD_DEL30_MOB24': 'sum',
+}).reset_index()
 
-print("Top 10 branches có EAD rủi ro cao nhất:")
-print(branch_risk.head(10))
+cohort_analysis['DEL30_RATE'] = cohort_analysis['EAD_DEL30_MOB24'] / cohort_analysis['DISBURSAL_AMOUNT']
+print(cohort_analysis)
 ```
 
-#### **C. Phân Tích Theo Customer Segment**
+### 5. Lưu Ý Quan Trọng
 
-```python
-# Tổng EAD theo customer segment
-segment_risk = (
-    df_enriched.groupby(["CUSTOMER_SEGMENT", "STATE_FORECAST"])["EAD_FORECAST"]
-    .sum()
-    .unstack(fill_value=0)
-)
+1. **PROB_DEL30 = DEL30_PCT từ lifecycle:**
+   - Giống nhau cho tất cả loans trong cùng cohort
+   - KHÔNG tính từ transition matrix
 
-print(segment_risk)
-```
+2. **EAD_DEL30 = DISBURSAL_AMOUNT × PROB_DEL30:**
+   - Dùng DISBURSAL_AMOUNT (số tiền giải ngân ban đầu)
+   - KHÔNG dùng EAD_CURRENT
 
-### 6. Workflow Hoàn Chỉnh
+3. **Validation:**
+   - Tổng `EAD_DEL30 / DISBURSAL_AMOUNT` phải = `DEL30_PCT` từ lifecycle
+   - Nếu không khớp → kiểm tra lại code
 
-```python
-# ===== BƯỚC 1: Forecast cohort-level (đã có từ trước) =====
-# df_lifecycle_final = ...
-
-# ===== BƯỚC 2: Phân bổ xuống loan-level =====
-df_allocated = allocate_forecast_to_loans_simple(
-    df_lifecycle_final=df_lifecycle_final,
-    df_raw=df_raw,
-    forecast_only=True,
-)
-
-# ===== BƯỚC 3: Validate =====
-compare_df = validate_allocation(df_allocated, df_lifecycle_final)
-
-# ===== BƯỚC 4: Enrich =====
-df_enriched = enrich_loan_forecast(
-    df_allocated=df_allocated,
-    df_raw=df_raw,
-    additional_cols=["CUSTOMER_ID", "CUSTOMER_NAME", "BRANCH_CODE"],
-)
-
-# ===== BƯỚC 5: Phân tích & Export =====
-# Tạo action list
-high_risk = df_enriched[
-    df_enriched["STATE_FORECAST"].isin(["DPD90+", "WRITEOFF"])
-]
-
-# Export
-with pd.ExcelWriter("outputs/Loan_Level_Forecast.xlsx") as writer:
-    df_enriched.to_excel(writer, sheet_name="All_Loans", index=False)
-    high_risk.to_excel(writer, sheet_name="High_Risk", index=False)
-    compare_df.to_excel(writer, sheet_name="Validation", index=False)
-```
-
-### 7. Lưu Ý Quan Trọng
-
-1. **Allocation Method:**
-   - Dùng `"proportional"` nếu cần giữ nguyên phân phối state
-   - Dùng `"simple"` nếu cần 1 state per loan (dễ action)
-   - Dùng `"equal"` nếu muốn phân bổ đều (ít dùng)
-
-2. **Validation:**
-   - Luôn chạy `validate_allocation()` sau khi phân bổ
-   - Chênh lệch < 0.1% là OK
-   - Chênh lệch > 1% cần kiểm tra lại
-
-3. **Performance:**
-   - Với data lớn (> 1M loans), dùng `simple` sẽ nhanh hơn
-   - Có thể filter forecast_only=True để giảm data
-
-4. **Random Seed:**
-   - `simple` method dùng random sampling
-   - Đã set `np.random.seed(42)` để reproducible
-   - Có thể thay đổi seed nếu cần
-
-### 8. Troubleshooting
-
-**Vấn đề: Tổng EAD không khớp**
-- Kiểm tra df_lifecycle_final có đủ các cột state không
-- Kiểm tra df_raw có đủ loans trong cohort không
-- Thử allocation_method khác
-
-**Vấn đề: Thiếu loans trong kết quả**
-- Kiểm tra VINTAGE_DATE có khớp giữa lifecycle và raw không
-- Kiểm tra PRODUCT_TYPE, RISK_SCORE có khớp không
-- Kiểm tra cutoff_date (chỉ lấy snapshot mới nhất)
-
-**Vấn đề: Enrich thiếu columns**
-- Kiểm tra additional_cols có tồn tại trong df_raw không
-- Kiểm tra loan_id có unique không (có thể bị duplicate)
+4. **STATE_FORECAST vs DEL flags:**
+   - `STATE_FORECAST`: Sampled từ transition matrix (có yếu tố random)
+   - `DEL30_FLAG`: 1 nếu STATE_FORECAST ∈ BUCKETS_30P
+   - `PROB_DEL30`: Tỉ lệ từ lifecycle (deterministic)
 
 ---
 
