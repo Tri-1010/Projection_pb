@@ -8,8 +8,10 @@ Notebook **`Complete_Workflow.ipynb`** là workflow hoàn chỉnh từ đầu đ
 2. ✅ Build transition matrices
 3. ✅ Forecast lifecycle
 4. ✅ Calibration (k per MOB)
-5. ✅ Allocate xuống loan-level (MOB 12 & 24)
-6. ✅ Export reports
+5. ✅ Apply calibration & aggregate
+6. ✅ Allocate xuống loan-level (MOB 12 & 24) + **Chi tiết hợp đồng**
+7. ✅ Analysis & visualization
+8. ✅ Export reports
 
 ---
 
@@ -84,10 +86,17 @@ Sau khi chạy xong, bạn sẽ có 3 files Excel trong folder `outputs/`:
 
 **Columns:**
 ```
-AGREEMENT_ID | PRODUCT_TYPE | RISK_SCORE | VINTAGE_DATE | MOB_CURRENT | EAD_CURRENT |
+AGREEMENT_ID | CUSTOMER_ID | PRODUCT_TYPE | RISK_SCORE | VINTAGE_DATE | MOB_CURRENT | EAD_CURRENT |
 STATE_FORECAST_MOB12 | EAD_FORECAST_MOB12 | DEL30_FLAG_MOB12 | DEL90_FLAG_MOB12 |
-STATE_FORECAST_MOB24 | EAD_FORECAST_MOB24 | DEL30_FLAG_MOB24 | DEL90_FLAG_MOB24
+STATE_FORECAST_MOB24 | EAD_FORECAST_MOB24 | DEL30_FLAG_MOB24 | DEL90_FLAG_MOB24 |
+... và TẤT CẢ các cột khác từ df_raw (BRANCH_CODE, PRODUCT_NAME, ...)
 ```
+
+**📌 Lưu ý quan trọng:**
+- ✅ Chi tiết hợp đồng **ĐÃ CÓ SẴN** trong kết quả allocate
+- ✅ **KHÔNG CẦN** merge thêm từ bảng khác
+- ✅ Tất cả các cột từ `df_raw` đã được tự động copy vào `df_loan_forecast`
+- ✅ Xem thêm: `GUIDE_LAY_CHI_TIET_HOP_DONG.md` và `example_get_loan_details.py`
 
 ### 3. `Calibration_k_values_YYYYMMDD_HHMMSS.xlsx`
 
@@ -194,6 +203,65 @@ print(f"Max forecast MOB: {max_forecast_mob}")
 
 ---
 
+## 📋 Chi Tiết Hợp Đồng (Loan Details)
+
+### Câu hỏi thường gặp: "Làm sao lấy chi tiết hợp đồng sau khi allocate?"
+
+**Trả lời:** Chi tiết hợp đồng **ĐÃ CÓ SẴN** trong `df_loan_forecast`!
+
+```python
+# Sau khi chạy section 6
+df_loan_forecast = allocate_multi_mob_with_del_metrics(...)
+
+# ✅ df_loan_forecast đã có SẴN tất cả các cột từ df_raw:
+# - AGREEMENT_ID, CUSTOMER_ID
+# - PRODUCT_TYPE, RISK_SCORE
+# - BRANCH_CODE, PRODUCT_NAME
+# - ... và TẤT CẢ các cột khác
+
+# Xem chi tiết
+print(df_loan_forecast.columns.tolist())
+print(df_loan_forecast[['AGREEMENT_ID', 'CUSTOMER_ID', 'PRODUCT_TYPE']].head())
+```
+
+### Các cột có sẵn trong df_loan_forecast:
+
+1. **Từ lifecycle (cohort-level):**
+   - PRODUCT_TYPE, RISK_SCORE, VINTAGE_DATE, MOB
+
+2. **Từ allocation (kết quả phân bổ):**
+   - STATE_FORECAST_MOB12, STATE_FORECAST_MOB24
+   - EAD_FORECAST_MOB12, EAD_FORECAST_MOB24
+   - DEL30_FLAG_MOB12, DEL90_FLAG_MOB12
+   - DEL30_FLAG_MOB24, DEL90_FLAG_MOB24
+
+3. **Từ df_raw (chi tiết hợp đồng):** ✅
+   - AGREEMENT_ID, CUSTOMER_ID
+   - DISBURSAL_DATE, CUTOFF_DATE
+   - PRINCIPLE_OUTSTANDING, STATE_MODEL
+   - BRANCH_CODE, PRODUCT_NAME
+   - **... và TẤT CẢ các cột khác từ df_raw**
+
+### Ví dụ sử dụng:
+
+```python
+# 1. Lọc hợp đồng có rủi ro cao
+df_high_risk = df_loan_forecast[df_loan_forecast['DEL90_FLAG_MOB12'] == 1]
+
+# 2. Phân tích theo chi nhánh
+df_branch = df_loan_forecast.groupby('BRANCH_CODE')['DEL90_FLAG_MOB12'].mean()
+
+# 3. Xuất chi tiết ra Excel
+df_loan_forecast.to_excel('Loan_Details.xlsx', index=False)
+```
+
+### Tài liệu chi tiết:
+
+- 📘 **GUIDE_LAY_CHI_TIET_HOP_DONG.md** - Hướng dẫn đầy đủ
+- 💻 **example_get_loan_details.py** - Code ví dụ
+
+---
+
 ## 📚 Tài Liệu Liên Quan
 
 - **guide.md**: Hướng dẫn đầy đủ về Calibration
@@ -245,6 +313,7 @@ print(f"Max forecast MOB: {max_forecast_mob}")
 ┌─────────────────┐
 │ 6. Allocate     │
 │  (Loan-level)   │
+│  + Chi tiết HĐ  │
 └────────┬────────┘
          │
          ▼
