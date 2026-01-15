@@ -21,7 +21,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 
-from src.config import CFG, BUCKETS_CANON, BUCKETS_30P, BUCKETS_60P, BUCKETS_90P
+from src.config import CFG, BUCKETS_CANON, BUCKETS_30P, BUCKETS_60P, BUCKETS_90P, parse_date_column
 
 # Absorbing states - dư nợ = 0
 ABSORBING_STATES = ['WRITEOFF', 'PREPAY', 'SOLDOUT']
@@ -125,7 +125,8 @@ def allocate_fast(
         df['DISBURSAL_AMOUNT'] = df['EAD_CURRENT']
     
     if 'VINTAGE_DATE' not in df.columns:
-        df['VINTAGE_DATE'] = df[CFG['orig_date']].apply(lambda x: x.replace(day=1))
+        # Parse date từ YYYYMM hoặc datetime
+        df['VINTAGE_DATE'] = parse_date_column(df[CFG['orig_date']])
     
     # ===================================================
     # BƯỚC 1: Tính state probabilities từ transition matrix
@@ -366,7 +367,8 @@ def allocate_multi_mob_fast(
     df = df_loans_latest.copy()
     
     if 'VINTAGE_DATE' not in df.columns:
-        df['VINTAGE_DATE'] = df[CFG['orig_date']].apply(lambda x: x.replace(day=1))
+        # Parse date từ YYYYMM hoặc datetime
+        df['VINTAGE_DATE'] = parse_date_column(df[CFG['orig_date']])
     
     # Các cột cần lấy từ df_loans_latest
     base_cols = [

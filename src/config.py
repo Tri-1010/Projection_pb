@@ -1,4 +1,5 @@
 from pathlib import Path
+import pandas as pd
 
 
 # ===== Resolve project root from this file path (stable across notebooks/scripts) =====
@@ -13,6 +14,56 @@ PARQUET_FILE = None  # or "rollrate_base.parquet" if bạn dùng 1 file duy nh�
 EXCEL_FILE   = PROJECT_ROOT / "data" / "rollrate_input.xlsx"   # 👈 đường dẫn mặc định nếu dùng Excel
 EXCEL_SHEET  = "Data"    
 # === COLUMNS CONFIG & others giữ nguyên ===
+
+# ===========================
+# A. Date Format Config
+# ===========================
+# Nếu DISBURSAL_DATE, CUTOFF_DATE là định dạng YYYYMM (int hoặc string)
+# thì set DATE_FORMAT = "YYYYMM"
+# Nếu là datetime thì set DATE_FORMAT = "datetime"
+DATE_FORMAT = "YYYYMM"  # "YYYYMM" hoặc "datetime"
+
+
+def parse_date(value):
+    """
+    Parse date từ nhiều định dạng khác nhau.
+    - YYYYMM (int/string): 202501 -> 2025-01-01
+    - datetime: giữ nguyên
+    - string date: parse bình thường
+    """
+    if pd.isna(value):
+        return pd.NaT
+    
+    # Nếu là int hoặc string dạng YYYYMM
+    if isinstance(value, (int, float)):
+        value = int(value)
+        if 190001 <= value <= 209912:  # YYYYMM range
+            year = value // 100
+            month = value % 100
+            return pd.Timestamp(year=year, month=month, day=1)
+    
+    # Nếu là string
+    if isinstance(value, str):
+        value = value.strip()
+        # YYYYMM format
+        if len(value) == 6 and value.isdigit():
+            year = int(value[:4])
+            month = int(value[4:6])
+            return pd.Timestamp(year=year, month=month, day=1)
+        # YYYY-MM format
+        if len(value) == 7 and value[4] == '-':
+            return pd.Timestamp(value + '-01')
+    
+    # Fallback: dùng pd.to_datetime
+    try:
+        return pd.to_datetime(value)
+    except:
+        return pd.NaT
+
+
+def parse_date_column(series):
+    """Parse toàn bộ column date."""
+    return series.apply(parse_date)
 
 # ===========================
 # B. Model parameters

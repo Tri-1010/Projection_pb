@@ -1,8 +1,9 @@
 from __future__ import annotations
 import pandas as pd
+import numpy as np
 from typing import Dict
 
-from src.config import CFG, BUCKETS_CANON
+from src.config import CFG, BUCKETS_CANON, parse_date_column
 
 # Forecast engine đã amount-based
 from src.rollrate.forecast import forecast_all_vintages
@@ -141,13 +142,15 @@ def tag_forecast_rows_amount(df_lifecycle, df_raw):
     for col in ("PRODUCT_TYPE", "RISK_SCORE"):
         if col in df.columns:
             df[col] = df[col].astype(str)
-    df["VINTAGE_DATE"] = pd.to_datetime(df["VINTAGE_DATE"], errors="coerce")
+    # Parse VINTAGE_DATE từ YYYYMM hoặc datetime
+    df["VINTAGE_DATE"] = parse_date_column(df["VINTAGE_DATE"])
 
     df_raw_norm = df_raw.copy()
     for col in ("PRODUCT_TYPE", "RISK_SCORE"):
         if col in df_raw_norm.columns:
             df_raw_norm[col] = df_raw_norm[col].astype(str)
-    df_raw_norm[orig] = pd.to_datetime(df_raw_norm[orig], errors="coerce")
+    # Parse orig_date từ YYYYMM hoặc datetime
+    df_raw_norm[orig] = parse_date_column(df_raw_norm[orig])
 
     actual_max = (
         df_raw_norm.groupby(["PRODUCT_TYPE", "RISK_SCORE", orig])[mob_col]
