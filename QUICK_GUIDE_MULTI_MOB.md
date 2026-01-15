@@ -61,6 +61,20 @@ Output:
 - Có forecast tại **2 MOB** (12 và 24)
 - Có **DEL flags** (0/1) cho mỗi MOB
 
+**⚠️ Quan trọng về EAD_FORECAST:**
+- `EAD_FORECAST < EAD_CURRENT` (thường xuyên)
+- Giảm do: prepayment, writeoff, amortization
+- Công thức: `EAD_FORECAST = EAD_CURRENT × (Total_EAD_Forecast / Total_EAD_Current)`
+- Xem chi tiết: `ALLOCATION_LOGIC_DETAILED.md`
+
+**Ví dụ:**
+```
+LOAN_001:
+  EAD_CURRENT = 100
+  EAD_FORECAST_MOB12 = 75  (giảm 25%)
+  EAD_FORECAST_MOB24 = 60  (giảm 40%)
+```
+
 ---
 
 ## 🔍 Phân Tích Nhanh
@@ -266,7 +280,38 @@ print(f"Impact: +{impact:,} loans")
 
 ## ⚠️ Lưu Ý
 
-### 1. Kiểm Tra Max Forecast MOB
+### 1. EAD_FORECAST Logic (Quan Trọng!)
+
+**EAD_FORECAST thường nhỏ hơn EAD_CURRENT:**
+
+```python
+# Kiểm tra
+print(f"EAD_CURRENT (avg): {df_result['EAD_CURRENT'].mean():,.2f}")
+print(f"EAD_FORECAST_MOB12 (avg): {df_result['EAD_FORECAST_MOB12'].mean():,.2f}")
+print(f"EAD_FORECAST_MOB24 (avg): {df_result['EAD_FORECAST_MOB24'].mean():,.2f}")
+
+# Reduction
+reduction_mob12 = (1 - df_result['EAD_FORECAST_MOB12'].sum() / df_result['EAD_CURRENT'].sum()) * 100
+reduction_mob24 = (1 - df_result['EAD_FORECAST_MOB24'].sum() / df_result['EAD_CURRENT'].sum()) * 100
+
+print(f"Reduction @ MOB 12: {reduction_mob12:.2f}%")
+print(f"Reduction @ MOB 24: {reduction_mob24:.2f}%")
+```
+
+**Tại sao giảm?**
+- Prepayment (trả trước)
+- Writeoff (xóa nợ)
+- Natural amortization (trả nợ theo kỳ hạn)
+
+**Công thức:**
+```
+ead_ratio = Total_EAD_Forecast_Cohort / Total_EAD_Current_Cohort
+EAD_FORECAST_loan = EAD_CURRENT_loan × ead_ratio
+```
+
+**Xem chi tiết:** `ALLOCATION_LOGIC_DETAILED.md`
+
+### 2. Kiểm Tra Max Forecast MOB
 
 ```python
 # Kiểm tra xem bạn đã forecast đến MOB nào
@@ -280,14 +325,14 @@ print(f"Max forecast MOB: {max_forecast_mob}")
 # → Cần forecast thêm hoặc giảm target_mobs
 ```
 
-### 2. DEL Flags Logic
+### 3. DEL Flags Logic
 
 ```python
 # DEL30_FLAG = 1 nếu STATE_FORECAST in ["DPD30+", "DPD60+", "DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
 # DEL90_FLAG = 1 nếu STATE_FORECAST in ["DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
 ```
 
-### 3. Allocation Method
+### 4. Allocation Method
 
 - `"simple"`: Mỗi loan 1 state (Monte Carlo sampling) - **Khuyến nghị**
 - `"proportional"`: Mỗi loan nhiều states theo tỷ lệ - Phức tạp hơn
