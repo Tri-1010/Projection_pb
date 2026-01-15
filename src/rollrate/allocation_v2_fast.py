@@ -1,11 +1,13 @@
 # ============================================================
 #  allocation_v2_fast.py – Phân bổ forecast NHANH (vectorized)
 #  
-#  LOGIC ĐÚNG:
-#  1. Lifecycle forecast cho EAD theo (cohort, MOB, STATE)
-#  2. Dùng transition matrix để assign STATE_FORECAST cho từng loan
-#  3. Phân bổ EAD từ lifecycle theo STATE_FORECAST
-#  4. Absorbing states (WRITEOFF, PREPAY, SOLDOUT) → EAD = 0
+#  OUTPUT:
+#  - STATE_FORECAST: State dự báo (sampled từ xác suất)
+#  - EAD_FORECAST: Dư nợ dự báo còn lại
+#  - PROB_DEL30: Xác suất loan sẽ ở DEL30+ tại MOB đó
+#  - PROB_DEL90: Xác suất loan sẽ ở DEL90+ tại MOB đó
+#  - EAD_DEL30: Dư nợ dự kiến thuộc nhóm DEL30+ = EAD_CURRENT × PROB_DEL30
+#  - EAD_DEL90: Dư nợ dự kiến thuộc nhóm DEL90+ = EAD_CURRENT × PROB_DEL90
 # ============================================================
 
 from __future__ import annotations
@@ -28,9 +30,7 @@ def _get_combined_matrix(
     mob_from: int,
     mob_to: int,
 ) -> np.ndarray:
-    """
-    Tính combined transition matrix từ mob_from đến mob_to.
-    """
+    """Tính combined transition matrix từ mob_from đến mob_to."""
     n_states = len(BUCKETS_CANON)
     state_to_idx = {s: i for i, s in enumerate(BUCKETS_CANON)}
     
@@ -77,12 +77,13 @@ def allocate_fast(
     """
     Phân bổ forecast NHANH.
     
-    LOGIC:
-    1. Dùng transition matrix để assign STATE_FORECAST (dựa trên STATE_CURRENT)
-    2. Phân bổ EAD từ lifecycle theo STATE_FORECAST:
-       - Absorbing states (WRITEOFF, PREPAY, SOLDOUT) → EAD = 0
-       - Active states → EAD phân bổ theo tỷ lệ từ lifecycle
-    3. Đảm bảo tổng EAD theo state khớp với lifecycle
+    OUTPUT columns:
+    - STATE_FORECAST: State dự báo (sampled)
+    - EAD_FORECAST: Dư nợ dự báo còn lại
+    - PROB_DEL30: Xác suất ở DEL30+
+    - PROB_DEL90: Xác suất ở DEL90+
+    - EAD_DEL30: EAD_CURRENT × PROB_DEL30 (dư nợ dự kiến thuộc DEL30+)
+    - EAD_DEL90: EAD_CURRENT × PROB_DEL90 (dư nợ dự kiến thuộc DEL90+)
     """
     
     loan_col = CFG["loan"]
@@ -94,6 +95,10 @@ def allocate_fast(
     
     n_states = len(BUCKETS_CANON)
     state_to_idx = {s: i for i, s in enumerate(BUCKETS_CANON)}
+    
+    # Index của các states thuộc DEL30+, DEL90+
+    del30_idx = [state_to_idx[s] for s in BUCKETS_30P if s in state_to_idx]
+    del90_idx = [state_to_idx[s] for s in BUCKETS_90P if s in state_to_idx]
     
     print(f"📍 Phân bổ forecast tại MOB = {target_mob} (FAST mode)")
     print(f"   Số loans: {len(df_loans_latest):,}")
@@ -108,7 +113,7 @@ def allocate_fast(
         df['VINTAGE_DATE'] = df[CFG['orig_date']].apply(lambda x: x.replace(day=1))
     
     # ===================================================
-    # BƯỚC 1: Assign STATE_FORECAST dùng transition matrix
+    # BƯỚC 1: Tính state probabilities từ transition matrix
     # ===================================================
     print("   Đang tính combined matrices...")
     matrix_cache = {}
@@ -164,6 +169,22 @@ def allocate_fast(
     probs_list = df.apply(get_state_probs, axis=1).tolist()
     probs_arr = np.array(probs_list)
     
+    # ===================================================
+    # BƯỚC 2: Tính PROB_DEL30, PROB_DEL90
+    # ===================================================
+    print("   Đang tính xác suất DEL...")
+    
+    # PROB_DEL30 = sum(prob[state] for state in BUCKETS_30P)
+    df['PROB_DEL30'] = probs_arr[:, del30_idx].sum(axis=1) if del30_idx else 0
+    df['PROB_DEL90'] = probs_arr[:, del90_idx].sum(axis=1) if del90_idx else 0
+    
+    # EAD_DEL30 = EAD_CURRENT × PROB_DEL30
+    df['EAD_DEL30'] = df['EAD_CURRENT'] * df['PROB_DEL30']
+    df['EAD_DEL90'] = df['EAD_CURRENT'] * df['PROB_DEL90']
+    
+    # ===================================================
+    # BƯỚC 3: Sample STATE_FORECAST
+    # ===================================================
     print("   Đang assign states...")
     
     def sample_state(probs):
@@ -174,20 +195,20 @@ def allocate_fast(
     
     df['STATE_FORECAST'] = [sample_state(p) for p in probs_arr]
     
+    # DEL flags (0/1) dựa trên STATE_FORECAST
+    df['DEL30_FLAG'] = df['STATE_FORECAST'].isin(BUCKETS_30P).astype(int)
+    df['DEL90_FLAG'] = df['STATE_FORECAST'].isin(BUCKETS_90P).astype(int)
+    
     # ===================================================
-    # BƯỚC 2: Phân bổ EAD theo STATE_FORECAST
+    # BƯỚC 4: Phân bổ EAD_FORECAST theo STATE_FORECAST
     # ===================================================
     print("   Đang phân bổ EAD theo state...")
     
     df_lc = df_lifecycle_final[df_lifecycle_final['MOB'] == target_mob].copy()
     
-    # Với mỗi cohort × state, tính EAD ratio
-    # EAD_FORECAST = EAD_CURRENT × (EAD_lifecycle_state / EAD_current_state)
-    
     df['EAD_FORECAST'] = 0.0
     
     for (product, score, vintage), grp in df.groupby(['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']):
-        # Lấy lifecycle row cho cohort này
         lc_mask = (
             (df_lc['PRODUCT_TYPE'] == product) &
             (df_lc['RISK_SCORE'] == score) &
@@ -196,25 +217,19 @@ def allocate_fast(
         lc_row = df_lc[lc_mask]
         
         if lc_row.empty:
-            # Không có lifecycle → giữ nguyên EAD (hoặc set = 0)
             continue
         
         lc_row = lc_row.iloc[0]
-        
-        # Tổng EAD current của cohort
         total_ead_current = grp['EAD_CURRENT'].sum()
         
         if total_ead_current <= 0:
             continue
         
-        # Phân bổ EAD theo từng state
         for state in BUCKETS_CANON:
-            # EAD từ lifecycle cho state này
             ead_lifecycle_state = lc_row.get(state, 0)
             if pd.isna(ead_lifecycle_state):
                 ead_lifecycle_state = 0
             
-            # Loans được assign vào state này
             state_mask = (
                 (df['PRODUCT_TYPE'] == product) &
                 (df['RISK_SCORE'] == score) &
@@ -222,25 +237,18 @@ def allocate_fast(
                 (df['STATE_FORECAST'] == state)
             )
             
-            n_loans_state = state_mask.sum()
-            
-            if n_loans_state == 0:
+            if state_mask.sum() == 0:
                 continue
             
-            # Tổng EAD current của loans trong state này
             ead_current_state = df.loc[state_mask, 'EAD_CURRENT'].sum()
             
             if ead_current_state <= 0:
                 continue
             
-            # Absorbing states → EAD = 0
             if state in ABSORBING_STATES:
                 df.loc[state_mask, 'EAD_FORECAST'] = 0
             else:
-                # Active states → phân bổ theo tỷ lệ
-                # EAD_FORECAST = EAD_CURRENT × (EAD_lifecycle_state / EAD_current_state)
                 ratio = ead_lifecycle_state / ead_current_state
-                # Cap at 1.0 để đảm bảo không tăng
                 ratio = min(ratio, 1.0)
                 df.loc[state_mask, 'EAD_FORECAST'] = df.loc[state_mask, 'EAD_CURRENT'] * ratio
     
@@ -252,6 +260,9 @@ def allocate_fast(
         loan_col, 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE',
         'STATE_CURRENT', 'MOB_CURRENT', 'EAD_CURRENT',
         'STATE_FORECAST', 'EAD_FORECAST',
+        'PROB_DEL30', 'PROB_DEL90',
+        'EAD_DEL30', 'EAD_DEL90',
+        'DEL30_FLAG', 'DEL90_FLAG',
         'TARGET_MOB', 'IS_FORECAST'
     ]
     
@@ -265,33 +276,18 @@ def allocate_fast(
     
     total_ead_current = df_result['EAD_CURRENT'].sum()
     total_ead_forecast = df_result['EAD_FORECAST'].sum()
+    total_ead_del30 = df_result['EAD_DEL30'].sum()
+    total_ead_del90 = df_result['EAD_DEL90'].sum()
     
-    print(f"   EAD_CURRENT: {total_ead_current:,.0f}")
-    print(f"   EAD_FORECAST: {total_ead_forecast:,.0f}")
-    print(f"   Reduction: {(1 - total_ead_forecast/total_ead_current)*100:.2f}%")
+    print(f"\n   EAD Summary:")
+    print(f"      EAD_CURRENT: {total_ead_current:,.0f}")
+    print(f"      EAD_FORECAST: {total_ead_forecast:,.0f} (giảm {(1-total_ead_forecast/total_ead_current)*100:.2f}%)")
+    print(f"      EAD_DEL30: {total_ead_del30:,.0f} ({total_ead_del30/total_ead_current*100:.2f}% of current)")
+    print(f"      EAD_DEL90: {total_ead_del90:,.0f} ({total_ead_del90/total_ead_current*100:.2f}% of current)")
     
-    # Kiểm tra absorbing states có EAD = 0
-    absorbing_mask = df_result['STATE_FORECAST'].isin(ABSORBING_STATES)
-    absorbing_ead = df_result.loc[absorbing_mask, 'EAD_FORECAST'].sum()
-    print(f"   Absorbing states EAD: {absorbing_ead:,.0f} (phải = 0)")
-    
-    # Kiểm tra EAD_FORECAST <= EAD_CURRENT
-    violations = (df_result['EAD_FORECAST'] > df_result['EAD_CURRENT'] * 1.001).sum()  # 0.1% tolerance
-    if violations > 0:
-        print(f"   ⚠️ WARNING: {violations} loans có EAD_FORECAST > EAD_CURRENT")
-    else:
-        print(f"   ✅ Tất cả loans có EAD_FORECAST <= EAD_CURRENT")
-    
-    # State distribution
-    print(f"\n   State distribution:")
-    state_dist = df_result.groupby('STATE_FORECAST').agg({
-        loan_col: 'count',
-        'EAD_FORECAST': 'sum'
-    }).rename(columns={loan_col: 'Count', 'EAD_FORECAST': 'EAD'})
-    
-    for state, row in state_dist.iterrows():
-        pct = row['Count'] / len(df_result) * 100
-        print(f"      {state}: {row['Count']:,} loans ({pct:.2f}%), EAD: {row['EAD']:,.0f}")
+    print(f"\n   DEL Probability (avg):")
+    print(f"      PROB_DEL30: {df_result['PROB_DEL30'].mean()*100:.2f}%")
+    print(f"      PROB_DEL90: {df_result['PROB_DEL90'].mean()*100:.2f}%")
     
     return df_result
 
@@ -307,7 +303,17 @@ def allocate_multi_mob_fast(
     seed: int = 42,
 ) -> pd.DataFrame:
     """
-    Phân bổ forecast tại NHIỀU MOB (FAST mode).
+    Phân bổ forecast tại NHIỀU MOB.
+    
+    OUTPUT columns per MOB:
+    - STATE_FORECAST_MOB{X}: State dự báo
+    - EAD_FORECAST_MOB{X}: Dư nợ dự báo còn lại
+    - PROB_DEL30_MOB{X}: Xác suất ở DEL30+
+    - PROB_DEL90_MOB{X}: Xác suất ở DEL90+
+    - EAD_DEL30_MOB{X}: Dư nợ dự kiến thuộc DEL30+
+    - EAD_DEL90_MOB{X}: Dư nợ dự kiến thuộc DEL90+
+    - DEL30_FLAG_MOB{X}: 1 nếu STATE_FORECAST ∈ DEL30+
+    - DEL90_FLAG_MOB{X}: 1 nếu STATE_FORECAST ∈ DEL90+
     """
     
     loan_col = CFG["loan"]
@@ -345,16 +351,33 @@ def allocate_multi_mob_fast(
         if df_allocated.empty:
             continue
         
-        df_mob = df_allocated[[loan_col, 'STATE_FORECAST', 'EAD_FORECAST']].copy()
-        df_mob = df_mob.rename(columns={
-            'STATE_FORECAST': f'STATE_FORECAST_MOB{target_mob}',
-            'EAD_FORECAST': f'EAD_FORECAST_MOB{target_mob}',
-        })
+        # Columns to merge
+        cols_to_merge = [loan_col, 'STATE_FORECAST', 'EAD_FORECAST']
         
         if include_del30:
-            df_mob[f'DEL30_FLAG_MOB{target_mob}'] = df_allocated['STATE_FORECAST'].isin(BUCKETS_30P).astype(int).values
+            cols_to_merge.extend(['PROB_DEL30', 'EAD_DEL30', 'DEL30_FLAG'])
         if include_del90:
-            df_mob[f'DEL90_FLAG_MOB{target_mob}'] = df_allocated['STATE_FORECAST'].isin(BUCKETS_90P).astype(int).values
+            cols_to_merge.extend(['PROB_DEL90', 'EAD_DEL90', 'DEL90_FLAG'])
+        
+        df_mob = df_allocated[[c for c in cols_to_merge if c in df_allocated.columns]].copy()
+        
+        # Rename với suffix _MOB{X}
+        rename_map = {
+            'STATE_FORECAST': f'STATE_FORECAST_MOB{target_mob}',
+            'EAD_FORECAST': f'EAD_FORECAST_MOB{target_mob}',
+        }
+        
+        if include_del30:
+            rename_map['PROB_DEL30'] = f'PROB_DEL30_MOB{target_mob}'
+            rename_map['EAD_DEL30'] = f'EAD_DEL30_MOB{target_mob}'
+            rename_map['DEL30_FLAG'] = f'DEL30_FLAG_MOB{target_mob}'
+        
+        if include_del90:
+            rename_map['PROB_DEL90'] = f'PROB_DEL90_MOB{target_mob}'
+            rename_map['EAD_DEL90'] = f'EAD_DEL90_MOB{target_mob}'
+            rename_map['DEL90_FLAG'] = f'DEL90_FLAG_MOB{target_mob}'
+        
+        df_mob = df_mob.rename(columns=rename_map)
         
         loan_info = loan_info.merge(df_mob, on=loan_col, how='left')
     
@@ -368,18 +391,32 @@ def allocate_multi_mob_fast(
     
     for target_mob in target_mobs:
         ead_col = f'EAD_FORECAST_MOB{target_mob}'
-        del90_col = f'DEL90_FLAG_MOB{target_mob}'
+        ead_del30_col = f'EAD_DEL30_MOB{target_mob}'
+        ead_del90_col = f'EAD_DEL90_MOB{target_mob}'
+        prob_del30_col = f'PROB_DEL30_MOB{target_mob}'
+        prob_del90_col = f'PROB_DEL90_MOB{target_mob}'
+        
+        print(f"\n   MOB {target_mob}:")
         
         if ead_col in loan_info.columns:
             ead_forecast = loan_info[ead_col].sum()
-            reduction = (1 - ead_forecast / loan_info['EAD_CURRENT'].sum()) * 100
-            print(f"\n   MOB {target_mob}:")
-            print(f"      EAD_FORECAST: {ead_forecast:,.0f} (giảm {reduction:.2f}%)")
-            
-            if del90_col in loan_info.columns:
-                del90_count = loan_info[del90_col].sum()
-                del90_pct = del90_count / len(loan_info) * 100
-                print(f"      DEL90+: {del90_count:,} ({del90_pct:.2f}%)")
+            print(f"      EAD_FORECAST: {ead_forecast:,.0f}")
+        
+        if ead_del30_col in loan_info.columns:
+            ead_del30 = loan_info[ead_del30_col].sum()
+            print(f"      EAD_DEL30: {ead_del30:,.0f}")
+        
+        if ead_del90_col in loan_info.columns:
+            ead_del90 = loan_info[ead_del90_col].sum()
+            print(f"      EAD_DEL90: {ead_del90:,.0f}")
+        
+        if prob_del30_col in loan_info.columns:
+            avg_prob_del30 = loan_info[prob_del30_col].mean() * 100
+            print(f"      Avg PROB_DEL30: {avg_prob_del30:.2f}%")
+        
+        if prob_del90_col in loan_info.columns:
+            avg_prob_del90 = loan_info[prob_del90_col].mean() * 100
+            print(f"      Avg PROB_DEL90: {avg_prob_del90:.2f}%")
     
     return loan_info
 
