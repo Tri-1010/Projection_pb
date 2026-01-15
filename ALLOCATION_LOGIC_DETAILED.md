@@ -51,6 +51,39 @@ LOAN_002     | SALPIL  | LOW  | 2024-01   | 1           | 100         | DPD30+  
 
 ### Bước 1: Chuẩn bị dữ liệu
 
+#### ⚠️ Quan trọng: EAD_CURRENT từ snapshot mới nhất
+
+**EAD_CURRENT được lấy từ CUTOFF_DATE gần nhất:**
+
+```python
+# Lấy snapshot mới nhất
+latest_cutoff = df_raw['CUTOFF_DATE'].max()
+df_loans_latest = df_raw[df_raw['CUTOFF_DATE'] == latest_cutoff]
+
+# EAD_CURRENT = PRINCIPLE_OUTSTANDING tại snapshot mới nhất
+# MOB_CURRENT = MOB tại snapshot mới nhất
+```
+
+**Ví dụ:**
+```
+Loan LOAN_001 có 3 snapshots:
+- 2024-10-31: MOB=1, EAD=100
+- 2024-11-30: MOB=2, EAD=98
+- 2024-12-31: MOB=3, EAD=95 ← Lấy từ đây
+
+→ EAD_CURRENT = 95 (không phải 100 hay 98)
+→ MOB_CURRENT = 3 (không phải 1 hay 2)
+```
+
+**Tại sao?**
+- Phản ánh tình trạng hiện tại
+- Tránh duplicate loans (1 loan chỉ xuất hiện 1 lần)
+- Consistency với lifecycle forecast
+
+**Xem chi tiết:** `CLARIFICATION_EAD_CURRENT_MOB.md`
+
+---
+
 #### Input 1: Lifecycle forecast (cohort-level)
 
 ```python
