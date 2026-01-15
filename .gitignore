@@ -8,3 +8,7 @@ __pycache__/
 *.xlsx
 *.parquet
 notebooks/V11.ipynb
+
+# Allow specific parquet snapshots for ETB exports
+!ETB_Parquet_YYYYMM/
+!ETB_Parquet_YYYYMM/*.parquet
