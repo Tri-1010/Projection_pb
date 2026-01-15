@@ -380,12 +380,9 @@ def allocate_forecast_to_loans_simple(
     df_loans_latest = df_loans[df_loans[cutoff_col] == latest_cutoff].copy()
     
     # ===================================================
-    # 2️⃣ Tính phân phối state cho mỗi cohort × MOB
+    # 2️⃣ Tính tổng EAD cho mỗi cohort × MOB (để tính phân phối state)
     # ===================================================
     df_lc["TOTAL_EAD"] = df_lc[BUCKETS_CANON].sum(axis=1)
-    
-    for st in BUCKETS_CANON:
-        df_lc[f"{st}_PCT"] = df_lc[st] / df_lc["TOTAL_EAD"]
     
     # ===================================================
     # 3️⃣ Assign state cho từng loan
@@ -398,8 +395,14 @@ def allocate_forecast_to_loans_simple(
         vintage = row_lc["VINTAGE_DATE"]
         mob = int(row_lc["MOB"])
         
+        # 🔥 Tổng EAD forecast từ lifecycle (tất cả states)
+        total_ead_forecast = row_lc[BUCKETS_CANON].sum()
+        
+        if total_ead_forecast <= 0:
+            continue
+        
         # Phân phối state (xác suất)
-        state_probs = {st: row_lc[f"{st}_PCT"] for st in BUCKETS_CANON}
+        state_probs = {st: row_lc[st] / total_ead_forecast for st in BUCKETS_CANON}
         state_probs = {k: v for k, v in state_probs.items() if pd.notna(v) and v > 0}
         
         if not state_probs:
@@ -421,6 +424,12 @@ def allocate_forecast_to_loans_simple(
         if df_cohort_loans.empty:
             continue
         
+        # 🔥 Tổng EAD hiện tại của cohort
+        total_ead_current = df_cohort_loans[ead_col].sum()
+        
+        if total_ead_current <= 0:
+            continue
+        
         # Assign state cho từng loan bằng sampling
         states_list = list(state_probs.keys())
         probs_list = list(state_probs.values())
@@ -436,7 +445,12 @@ def allocate_forecast_to_loans_simple(
         df_cohort_loans["MOB"] = mob
         df_cohort_loans["MOB_CURRENT"] = df_cohort_loans[mob_col]  # MOB hiện tại
         df_cohort_loans["IS_FORECAST"] = 1
-        df_cohort_loans["EAD_FORECAST"] = df_cohort_loans[ead_col]
+        
+        # 🔥 FIX: EAD_FORECAST phải tính theo tỷ lệ từ lifecycle forecast
+        # EAD_FORECAST_loan = EAD_CURRENT_loan * (Total_EAD_Forecast / Total_EAD_Current)
+        ead_ratio = total_ead_forecast / total_ead_current
+        df_cohort_loans["EAD_FORECAST"] = df_cohort_loans[ead_col] * ead_ratio
+        
         df_cohort_loans["TARGET_MOB"] = mob  # MOB được phân bổ
         
         results.append(df_cohort_loans)
@@ -450,7 +464,30 @@ def allocate_forecast_to_loans_simple(
     
     df_result = pd.concat(results, ignore_index=True)
     
-    print(f"✅ Phân bổ hoàn tất: {len(df_result):,} loan-level forecasts.")
+    # ===================================================
+    # 5️⃣ Validation: Kiểm tra tổng EAD
+    # ===================================================
+    print("\n✅ Phân bổ hoàn tất. Kiểm tra tổng EAD...")
+    
+    # Tổng EAD từ lifecycle (cohort-level)
+    total_ead_lifecycle = df_lc[BUCKETS_CANON].sum().sum()
+    
+    # Tổng EAD từ allocation (loan-level)
+    total_ead_allocated = df_result["EAD_FORECAST"].sum()
+    
+    diff = abs(total_ead_lifecycle - total_ead_allocated)
+    diff_pct = diff / total_ead_lifecycle * 100 if total_ead_lifecycle > 0 else 0
+    
+    print(f"  - Tổng EAD lifecycle: {total_ead_lifecycle:,.0f}")
+    print(f"  - Tổng EAD allocated: {total_ead_allocated:,.0f}")
+    print(f"  - Chênh lệch: {diff:,.0f} ({diff_pct:.4f}%)")
+    
+    if diff_pct > 0.01:
+        print(f"⚠️ Chênh lệch > 0.01%, có thể do làm tròn hoặc missing loans.")
+    else:
+        print("✅ Tổng EAD khớp (chênh lệch < 0.01%).")
+    
+    print(f"\n📊 Kết quả: {len(df_result):,} loan-level forecasts.")
     
     return df_result
 
