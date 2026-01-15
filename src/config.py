@@ -85,8 +85,68 @@ CFG = dict(
 )
 
 # === SEGMENTATION CONFIG ===
-SEGMENT_COLS = ["RISK_SCORE", "PRODUCT_TYPE"]
-#SEGMENT_COLS = ["RISK_SCORE"]
+# Các cột dùng để phân nhóm (segment) khi tính transition matrix và forecast
+# Thay đổi list này để thêm/bớt segment dimensions
+# Lưu ý: Code sử dụng 2 cột cố định: PRODUCT_TYPE và RISK_SCORE
+# - PRODUCT_TYPE: giữ nguyên từ data
+# - RISK_SCORE: sẽ được tạo tự động từ các cột trong SEGMENT_COLS (trừ PRODUCT_TYPE)
+#
+# Ví dụ:
+# - SEGMENT_COLS = ["PRODUCT_TYPE", "GRADE"] => RISK_SCORE = GRADE
+# - SEGMENT_COLS = ["PRODUCT_TYPE", "GRADE", "GENDER"] => RISK_SCORE = "GRADE_GENDER"
+# - SEGMENT_COLS = ["PRODUCT_TYPE", "GRADE", "GENDER", "LA_GROUP"] => RISK_SCORE = "GRADE_GENDER_LA_GROUP"
+SEGMENT_COLS = ["PRODUCT_TYPE", "GRADE"]  # Mặc định: RISK_SCORE = GRADE
+
+def get_cohort_cols():
+    """Trả về list columns để định nghĩa 1 cohort: SEGMENT_COLS + VINTAGE_DATE"""
+    return ["PRODUCT_TYPE", "RISK_SCORE", "VINTAGE_DATE"]
+
+def get_cohort_mob_cols():
+    """Trả về list columns để định nghĩa 1 cohort tại 1 MOB"""
+    return ["PRODUCT_TYPE", "RISK_SCORE", "VINTAGE_DATE", "MOB"]
+
+def create_segment_columns(df):
+    """
+    Tạo cột PRODUCT_TYPE và RISK_SCORE từ SEGMENT_COLS.
+    
+    Logic:
+    - Nếu SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"]: giữ nguyên
+    - Nếu SEGMENT_COLS = ["PRODUCT_TYPE", "GRADE", "GENDER", "LA_GROUP"]:
+      + PRODUCT_TYPE: giữ nguyên
+      + RISK_SCORE = "GRADE_GENDER_LA_GROUP" (ghép các giá trị)
+    
+    Returns:
+        DataFrame với cột PRODUCT_TYPE và RISK_SCORE đã được chuẩn hóa
+    """
+    df = df.copy()
+    
+    # Lấy các cột segment (trừ PRODUCT_TYPE)
+    other_cols = [c for c in SEGMENT_COLS if c != "PRODUCT_TYPE"]
+    
+    if not other_cols:
+        # Không có cột nào khác, tạo RISK_SCORE mặc định
+        if "RISK_SCORE" not in df.columns:
+            df["RISK_SCORE"] = "ALL"
+    elif other_cols == ["RISK_SCORE"]:
+        # Chỉ có RISK_SCORE, giữ nguyên
+        df["RISK_SCORE"] = df["RISK_SCORE"].astype(str)
+    else:
+        # Ghép nhiều cột thành RISK_SCORE
+        # Kiểm tra các cột có tồn tại không
+        missing_cols = [c for c in other_cols if c not in df.columns]
+        if missing_cols:
+            raise KeyError(f"SEGMENT_COLS chứa các cột không tồn tại trong data: {missing_cols}")
+        
+        # Ghép các cột thành RISK_SCORE
+        df["RISK_SCORE"] = df[other_cols].astype(str).agg("_".join, axis=1)
+        print(f"   ✅ Tạo RISK_SCORE từ {other_cols}: {df['RISK_SCORE'].nunique()} unique values")
+    
+    # Đảm bảo PRODUCT_TYPE là string
+    if "PRODUCT_TYPE" in df.columns:
+        df["PRODUCT_TYPE"] = df["PRODUCT_TYPE"].astype(str)
+    
+    return df
+
 SEGMENT_MAP = {
     "RISK_SCORE": ["LOW", "MEDIUM", "HIGH"],
     "PRODUCT_TYPE": ["PL", "CC"],
