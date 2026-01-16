@@ -198,6 +198,12 @@ def allocate_fast(
     df_lc['VINTAGE_DATE'] = pd.to_datetime(df_lc['VINTAGE_DATE'])
     df['VINTAGE_DATE'] = pd.to_datetime(df['VINTAGE_DATE'])
     
+    # DEBUG: Kiểm tra số cohorts trong lifecycle vs loans
+    lc_cohorts = set(df_lc.groupby(['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']).ngroups for _ in [1])
+    loan_cohorts = df.groupby(['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']).ngroups
+    print(f"   📊 Lifecycle cohorts @ MOB {target_mob}: {len(df_lc.groupby(['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']))}")
+    print(f"   📊 Loan cohorts: {loan_cohorts}")
+    
     # Lấy DEL30_PCT, DEL90_PCT từ lifecycle
     del_cols = ['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']
     if 'DEL30_PCT' in df_lc.columns:
@@ -207,12 +213,34 @@ def allocate_fast(
     
     df_del_rates = df_lc[del_cols].drop_duplicates()
     
+    # DEBUG: Kiểm tra unique combinations
+    print(f"   📊 DEL rates records: {len(df_del_rates)}")
+    
     # Merge DEL rates vào df
+    n_before = len(df)
     df = df.merge(
         df_del_rates,
         on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
         how='left'
     )
+    n_after = len(df)
+    
+    # DEBUG: Kiểm tra merge có đúng không
+    if n_after != n_before:
+        print(f"   ⚠️ WARNING: Merge làm thay đổi số rows: {n_before} -> {n_after}")
+    
+    # Kiểm tra có bao nhiêu loans không match được DEL rates
+    n_missing_del30 = df['DEL30_PCT'].isna().sum() if 'DEL30_PCT' in df.columns else len(df)
+    if n_missing_del30 > 0:
+        print(f"   ⚠️ WARNING: {n_missing_del30:,} loans ({n_missing_del30/len(df)*100:.1f}%) không có DEL rates từ lifecycle")
+        
+        # DEBUG: In ra các cohorts không match
+        if n_missing_del30 < len(df):  # Không phải tất cả đều missing
+            missing_cohorts = df[df['DEL30_PCT'].isna()].groupby(['PRODUCT_TYPE', 'RISK_SCORE']).size().head(10)
+            if len(missing_cohorts) > 0:
+                print(f"   📋 Sample missing cohorts (PRODUCT_TYPE, RISK_SCORE):")
+                for (prod, score), cnt in missing_cohorts.items():
+                    print(f"      - {prod}, {score}: {cnt} loans")
     
     # PROB_DEL30 = DEL30_PCT từ lifecycle (giống nhau cho tất cả loans trong cohort)
     df['PROB_DEL30'] = df['DEL30_PCT'].fillna(0)
@@ -249,6 +277,9 @@ def allocate_fast(
     
     df['EAD_FORECAST'] = 0.0
     
+    n_cohorts_processed = 0
+    n_cohorts_missing = 0
+    
     for (product, score, vintage), grp in df.groupby(['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']):
         lc_mask = (
             (df_lc['PRODUCT_TYPE'] == product) &
@@ -258,8 +289,10 @@ def allocate_fast(
         lc_row = df_lc[lc_mask]
         
         if lc_row.empty:
+            n_cohorts_missing += 1
             continue
         
+        n_cohorts_processed += 1
         lc_row = lc_row.iloc[0]
         total_ead_current = grp['EAD_CURRENT'].sum()
         
@@ -292,6 +325,8 @@ def allocate_fast(
                 ratio = ead_lifecycle_state / ead_current_state
                 ratio = min(ratio, 1.0)
                 df.loc[state_mask, 'EAD_FORECAST'] = df.loc[state_mask, 'EAD_CURRENT'] * ratio
+    
+    print(f"   📊 Cohorts processed: {n_cohorts_processed}, missing in lifecycle: {n_cohorts_missing}")
     
     df['TARGET_MOB'] = target_mob
     df['IS_FORECAST'] = 1
