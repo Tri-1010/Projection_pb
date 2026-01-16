@@ -193,3 +193,135 @@ ADJUST_METHOD = "multiplicative"
 MACRO_LAG = 1
 MACRO_SOURCE = "sql/macro_data.sql"
 COLLX_SOURCE = "sql/collx_index.sql"
+
+
+# ===========================
+# C. Excel Export Helper
+# ===========================
+EXCEL_MAX_ROWS = 1_000_000  # Excel limit is 1,048,576, use 1M for safety
+
+
+def export_large_dataframe(df, filepath, sheet_prefix="Data", index=False):
+    """
+    Export DataFrame lớn ra Excel, tự động chia thành nhiều sheet nếu vượt quá giới hạn.
+    
+    Args:
+        df: DataFrame cần export
+        filepath: Đường dẫn file Excel (str hoặc Path)
+        sheet_prefix: Tên prefix cho sheet (mặc định "Data")
+        index: Có ghi index không (mặc định False)
+    
+    Returns:
+        int: Số sheet đã tạo
+    
+    Example:
+        export_large_dataframe(df_loan_forecast, "outputs/Loan_Forecast.xlsx", "Loans")
+        # Nếu df có 2.5M rows -> tạo 3 sheets: Loans_1, Loans_2, Loans_3
+    """
+    filepath = Path(filepath)
+    n_rows = len(df)
+    
+    if n_rows <= EXCEL_MAX_ROWS:
+        # Đủ nhỏ, ghi 1 sheet
+        df.to_excel(filepath, sheet_name=sheet_prefix, index=index, engine="xlsxwriter")
+        print(f"   ✅ Exported {n_rows:,} rows to {filepath}")
+        return 1
+    
+    # Cần chia nhiều sheet
+    n_sheets = (n_rows // EXCEL_MAX_ROWS) + 1
+    print(f"   ⚠️ Data có {n_rows:,} rows > {EXCEL_MAX_ROWS:,} limit")
+    print(f"   📊 Chia thành {n_sheets} sheets...")
+    
+    with pd.ExcelWriter(filepath, engine="xlsxwriter") as writer:
+        for i in range(n_sheets):
+            start_idx = i * EXCEL_MAX_ROWS
+            end_idx = min((i + 1) * EXCEL_MAX_ROWS, n_rows)
+            
+            sheet_name = f"{sheet_prefix}_{i+1}"
+            df_chunk = df.iloc[start_idx:end_idx]
+            df_chunk.to_excel(writer, sheet_name=sheet_name, index=index)
+            
+            print(f"      Sheet {sheet_name}: rows {start_idx:,} → {end_idx:,} ({len(df_chunk):,} rows)")
+    
+    print(f"   ✅ Exported {n_rows:,} rows to {filepath} ({n_sheets} sheets)")
+    return n_sheets
+
+
+def export_loan_forecast_excel(df, filepath, target_mobs=None, include_del_sheets=True):
+    """
+    Export loan forecast ra Excel với nhiều sheets.
+    Tự động chia nhỏ nếu data quá lớn.
+    
+    Args:
+        df: DataFrame loan forecast
+        filepath: Đường dẫn file Excel
+        target_mobs: List MOBs (vd: [12, 24]) để tạo sheet DEL riêng
+        include_del_sheets: Có tạo sheet riêng cho DEL90 không
+    
+    Example:
+        export_loan_forecast_excel(
+            df_loan_forecast, 
+            "outputs/Loan_Forecast.xlsx",
+            target_mobs=[12, 24],
+            include_del_sheets=True
+        )
+    """
+    filepath = Path(filepath)
+    n_rows = len(df)
+    
+    if n_rows <= EXCEL_MAX_ROWS:
+        # Đủ nhỏ, ghi bình thường với nhiều sheets
+        with pd.ExcelWriter(filepath, engine="xlsxwriter") as writer:
+            df.to_excel(writer, sheet_name="All_Loans", index=False)
+            
+            if include_del_sheets and target_mobs:
+                for mob in target_mobs:
+                    col = f'DEL90_FLAG_MOB{mob}'
+                    if col in df.columns:
+                        df_del = df[df[col] == 1]
+                        if len(df_del) > 0:
+                            df_del.to_excel(writer, sheet_name=f"DEL90_MOB{mob}", index=False)
+        
+        print(f"   ✅ Exported {n_rows:,} rows to {filepath}")
+        return
+    
+    # Data quá lớn, cần chia nhỏ
+    print(f"   ⚠️ Data có {n_rows:,} rows > {EXCEL_MAX_ROWS:,} limit")
+    
+    n_sheets = (n_rows // EXCEL_MAX_ROWS) + 1
+    print(f"   📊 Chia All_Loans thành {n_sheets} sheets...")
+    
+    with pd.ExcelWriter(filepath, engine="xlsxwriter") as writer:
+        # Chia All_Loans thành nhiều sheets
+        for i in range(n_sheets):
+            start_idx = i * EXCEL_MAX_ROWS
+            end_idx = min((i + 1) * EXCEL_MAX_ROWS, n_rows)
+            
+            sheet_name = f"All_Loans_{i+1}" if n_sheets > 1 else "All_Loans"
+            df_chunk = df.iloc[start_idx:end_idx]
+            df_chunk.to_excel(writer, sheet_name=sheet_name, index=False)
+            print(f"      {sheet_name}: {len(df_chunk):,} rows")
+        
+        # DEL sheets (thường nhỏ hơn nhiều)
+        if include_del_sheets and target_mobs:
+            for mob in target_mobs:
+                col = f'DEL90_FLAG_MOB{mob}'
+                if col in df.columns:
+                    df_del = df[df[col] == 1]
+                    if len(df_del) > 0:
+                        if len(df_del) <= EXCEL_MAX_ROWS:
+                            df_del.to_excel(writer, sheet_name=f"DEL90_MOB{mob}", index=False)
+                            print(f"      DEL90_MOB{mob}: {len(df_del):,} rows")
+                        else:
+                            # DEL cũng quá lớn, chia nhỏ
+                            n_del_sheets = (len(df_del) // EXCEL_MAX_ROWS) + 1
+                            for j in range(n_del_sheets):
+                                s = j * EXCEL_MAX_ROWS
+                                e = min((j + 1) * EXCEL_MAX_ROWS, len(df_del))
+                                df_del.iloc[s:e].to_excel(
+                                    writer, 
+                                    sheet_name=f"DEL90_MOB{mob}_{j+1}", 
+                                    index=False
+                                )
+    
+    print(f"   ✅ Exported {n_rows:,} rows to {filepath}")
