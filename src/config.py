@@ -95,7 +95,7 @@ CFG = dict(
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"] => giữ nguyên RISK_SCORE từ data
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"] => RISK_SCORE = "RISK_SCORE_GENDER"
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"] => RISK_SCORE = "RISK_SCORE_GENDER_LA_GROUP"
-SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE","GENDER","LA_GROUP"]  # Mặc định: giữ nguyên RISK_SCORE từ data
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE","GENDER","LA_GROUP","SALE_CHANNEL"]  # Mặc định: giữ nguyên RISK_SCORE từ data
 
 def get_cohort_cols():
     """Trả về list columns để định nghĩa 1 cohort: SEGMENT_COLS + VINTAGE_DATE"""

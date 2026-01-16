@@ -326,6 +326,7 @@ def export_multi_mob_to_excel(
 ) -> None:
     """
     Export kết quả multi-MOB ra Excel với nhiều sheets.
+    Tự động chia nhỏ nếu data > 1M rows.
     
     Sheets:
         1. All_Loans: Tất cả loans với forecast tại các MOB
@@ -335,13 +336,26 @@ def export_multi_mob_to_excel(
         5. DEL90_MOB24: Loans có DEL90=1 tại MOB 24
         6. Summary: Tổng hợp số liệu
     """
+    from src.config import EXCEL_MAX_ROWS
     
     loan_col = CFG["loan"]
+    n_rows = len(df_multi_mob)
     
     with pd.ExcelWriter(filename, engine="xlsxwriter") as writer:
         
-        # Sheet 1: All loans
-        df_multi_mob.to_excel(writer, sheet_name="All_Loans", index=False)
+        # Sheet 1: All loans (chia nhỏ nếu cần)
+        if n_rows <= EXCEL_MAX_ROWS:
+            df_multi_mob.to_excel(writer, sheet_name="All_Loans", index=False)
+        else:
+            n_sheets = (n_rows // EXCEL_MAX_ROWS) + 1
+            print(f"   ⚠️ Data có {n_rows:,} rows > {EXCEL_MAX_ROWS:,}, chia thành {n_sheets} sheets")
+            for i in range(n_sheets):
+                start_idx = i * EXCEL_MAX_ROWS
+                end_idx = min((i + 1) * EXCEL_MAX_ROWS, n_rows)
+                sheet_name = f"All_Loans_{i+1}"
+                df_multi_mob.iloc[start_idx:end_idx].to_excel(
+                    writer, sheet_name=sheet_name, index=False
+                )
         
         # Sheet 2-5: DEL30/DEL90 per MOB
         for mob in target_mobs:
@@ -357,7 +371,18 @@ def export_multi_mob_to_excel(
                     continue
                 
                 sheet_name = f"{metric}_MOB{mob}"
-                df_del.to_excel(writer, sheet_name=sheet_name, index=False)
+                
+                # Chia nhỏ nếu cần
+                if len(df_del) <= EXCEL_MAX_ROWS:
+                    df_del.to_excel(writer, sheet_name=sheet_name, index=False)
+                else:
+                    n_del_sheets = (len(df_del) // EXCEL_MAX_ROWS) + 1
+                    for j in range(n_del_sheets):
+                        s = j * EXCEL_MAX_ROWS
+                        e = min((j + 1) * EXCEL_MAX_ROWS, len(df_del))
+                        df_del.iloc[s:e].to_excel(
+                            writer, sheet_name=f"{sheet_name}_{j+1}", index=False
+                        )
         
         # Sheet 6: Summary
         summary_rows = []
