@@ -83,8 +83,12 @@ def allocate_multi_mob_optimized(
     # Các cột cần lấy từ df_loans_latest
     base_cols = [
         loan_col, 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE',
-        CFG["mob"], CFG["ead"], CFG["state"]
+        CFG["mob"], CFG["ead"]
     ]
+    
+    # Thêm STATE nếu có (không bắt buộc)
+    if CFG["state"] in df.columns:
+        base_cols.append(CFG["state"])
     
     # Thêm DISBURSAL_DATE, DISBURSAL_AMOUNT nếu có
     orig_date_col = CFG.get("orig_date", "DISBURSAL_DATE")
@@ -104,8 +108,11 @@ def allocate_multi_mob_optimized(
     rename_map = {
         CFG["mob"]: 'MOB_CURRENT',
         CFG["ead"]: 'EAD_CURRENT',
-        CFG["state"]: 'STATE_CURRENT',
     }
+    
+    # Rename STATE nếu có
+    if CFG["state"] in loan_info.columns:
+        rename_map[CFG["state"]] = 'STATE_CURRENT'
     
     if orig_date_col in loan_info.columns and orig_date_col != 'DISBURSAL_DATE':
         rename_map[orig_date_col] = 'DISBURSAL_DATE'
