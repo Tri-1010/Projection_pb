@@ -174,25 +174,34 @@ def allocate_multi_mob_optimized(
                     loan_info[f'DEL90_FLAG_MOB{target_mob}'] = loan_info[f'STATE_FORECAST_MOB{target_mob}'].isin(BUCKETS_90P).astype(int)
                 
                 # Lấy PROB_DEL từ lifecycle
-                df_del_rates = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE', 'DEL30_PCT', 'DEL90_PCT']].copy()
+                df_del_rates = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']].copy()
+                if 'DEL30_PCT' in df_lc_actual.columns:
+                    df_del_rates['DEL30_PCT'] = df_lc_actual['DEL30_PCT']
+                if 'DEL90_PCT' in df_lc_actual.columns:
+                    df_del_rates['DEL90_PCT'] = df_lc_actual['DEL90_PCT']
                 
-                loan_info = loan_info.merge(
+                # Merge DEL rates (chỉ cho loans thuộc actual cohorts)
+                loan_info_actual_mask = loan_info[loan_col].isin(df_raw_target_merged[loan_col])
+                
+                loan_info_actual = loan_info[loan_info_actual_mask].merge(
                     df_del_rates,
                     on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
-                    how='left',
-                    suffixes=('', f'_MOB{target_mob}')
+                    how='left'
                 )
                 
-                if include_del30:
-                    loan_info[f'PROB_DEL30_MOB{target_mob}'] = loan_info[f'DEL30_PCT_MOB{target_mob}'].fillna(0)
-                    loan_info[f'EAD_DEL30_MOB{target_mob}'] = loan_info['DISBURSAL_AMOUNT'] * loan_info[f'PROB_DEL30_MOB{target_mob}']
+                if include_del30 and 'DEL30_PCT' in loan_info_actual.columns:
+                    loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}'] = loan_info_actual['DEL30_PCT'].fillna(0)
+                    loan_info.loc[loan_info_actual_mask, f'EAD_DEL30_MOB{target_mob}'] = (
+                        loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'] * 
+                        loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}']
+                    )
                 
-                if include_del90:
-                    loan_info[f'PROB_DEL90_MOB{target_mob}'] = loan_info[f'DEL90_PCT_MOB{target_mob}'].fillna(0)
-                    loan_info[f'EAD_DEL90_MOB{target_mob}'] = loan_info['DISBURSAL_AMOUNT'] * loan_info[f'PROB_DEL90_MOB{target_mob}']
-                
-                # Drop temp columns
-                loan_info = loan_info.drop(columns=[f'DEL30_PCT_MOB{target_mob}', f'DEL90_PCT_MOB{target_mob}'], errors='ignore')
+                if include_del90 and 'DEL90_PCT' in loan_info_actual.columns:
+                    loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}'] = loan_info_actual['DEL90_PCT'].fillna(0)
+                    loan_info.loc[loan_info_actual_mask, f'EAD_DEL90_MOB{target_mob}'] = (
+                        loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'] * 
+                        loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}']
+                    )
                 
                 print(f"      ✅ Lấy actual cho {len(df_raw_target_merged):,} loans")
         
