@@ -639,4 +639,124 @@ print(cohort_analysis)
 ---
 
 **Tác giả:** Roll Rate Model Team  
-**Cập nhật:** 2025-01-15
+**Cập nhật:** 2025-01-16
+
+---
+
+## 📍 Phần 9: CẤU HÌNH SEGMENT ĐỘNG
+
+### 1. Tổng Quan
+
+Hệ thống sử dụng 2 cột cố định để phân nhóm (segment):
+- **PRODUCT_TYPE**: Loại sản phẩm (giữ nguyên từ data)
+- **RISK_SCORE**: Nhóm rủi ro (có thể tự động tạo từ nhiều cột)
+
+### 2. Cấu Hình SEGMENT_COLS
+
+Trong `src/config.py`:
+
+```python
+# === SEGMENTATION CONFIG ===
+# Thay đổi SEGMENT_COLS để thêm/bớt segment dimensions
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"]  # Mặc định
+
+# Ví dụ mở rộng:
+# SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"]
+# => RISK_SCORE sẽ = "RISK_SCORE_GENDER" (ghép các giá trị)
+
+# SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]
+# => RISK_SCORE sẽ = "RISK_SCORE_GENDER_LA_GROUP"
+```
+
+### 3. Hàm create_segment_columns()
+
+```python
+from src.config import create_segment_columns, SEGMENT_COLS
+
+# Tự động tạo PRODUCT_TYPE và RISK_SCORE từ SEGMENT_COLS
+df_raw = create_segment_columns(df_raw)
+
+print(f"SEGMENT_COLS: {SEGMENT_COLS}")
+print(f"RISK_SCORE unique: {df_raw['RISK_SCORE'].nunique()}")
+```
+
+**Logic:**
+- Nếu `SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"]`: giữ nguyên RISK_SCORE từ data
+- Nếu `SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"]`: RISK_SCORE = "RISK_SCORE_GENDER"
+- Nếu `SEGMENT_COLS = ["PRODUCT_TYPE", "A", "B", "C"]`: RISK_SCORE = "A_B_C"
+
+### 4. Ví Dụ Sử Dụng
+
+#### A. Segment theo RISK_SCORE + GENDER
+
+```python
+# Trong src/config.py:
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"]
+
+# Trong notebook:
+from src.config import create_segment_columns
+df_raw = create_segment_columns(df_raw)
+
+# Kết quả: RISK_SCORE = "A_M", "A_F", "B_M", "B_F", ...
+print(df_raw['RISK_SCORE'].unique())
+```
+
+#### B. Segment theo nhiều cột
+
+```python
+# Trong src/config.py:
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP", "REGION"]
+
+# Trong notebook:
+df_raw = create_segment_columns(df_raw)
+
+# Kết quả: RISK_SCORE = "A_M_G1_North", "A_F_G2_South", ...
+```
+
+### 5. Lưu Ý Quan Trọng
+
+1. **Các cột trong SEGMENT_COLS phải tồn tại trong data:**
+   ```python
+   # Nếu data không có cột GENDER, sẽ báo lỗi:
+   # KeyError: SEGMENT_COLS chứa các cột không tồn tại trong data: ['GENDER']
+   ```
+
+2. **Số lượng segment tăng theo cấp số nhân:**
+   ```python
+   # RISK_SCORE: 3 values (A, B, C)
+   # GENDER: 2 values (M, F)
+   # LA_GROUP: 4 values (G1, G2, G3, G4)
+   # => Tổng segments: 3 × 2 × 4 = 24 combinations
+   ```
+
+3. **Cần đủ data cho mỗi segment:**
+   - Nếu segment quá nhỏ (< MIN_OBS), transition matrix sẽ không ổn định
+   - Khuyến nghị: mỗi segment nên có ít nhất 100-500 loans
+
+4. **PRODUCT_TYPE luôn giữ nguyên:**
+   - Chỉ các cột khác (trừ PRODUCT_TYPE) được ghép vào RISK_SCORE
+
+### 6. Workflow Hoàn Chỉnh
+
+```python
+# 1. Cấu hình SEGMENT_COLS trong src/config.py
+# SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"]
+
+# 2. Load data
+from src.data_loader import load_data
+df_raw = load_data(DATA_PATH)
+
+# 3. Parse date (nếu dùng YYYYMM format)
+from src.config import parse_date_column
+df_raw['DISBURSAL_DATE'] = parse_date_column(df_raw['DISBURSAL_DATE'])
+
+# 4. Tạo segment columns
+from src.config import create_segment_columns, SEGMENT_COLS
+df_raw = create_segment_columns(df_raw)
+print(f"SEGMENT_COLS: {SEGMENT_COLS}")
+print(f"RISK_SCORE unique: {df_raw['RISK_SCORE'].nunique()}")
+
+# 5. Tiếp tục workflow bình thường...
+matrices_by_mob, parent_fallback = compute_transition_by_mob(df_raw)
+# ...
+```
