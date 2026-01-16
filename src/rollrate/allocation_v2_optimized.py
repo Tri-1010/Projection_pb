@@ -144,16 +144,30 @@ def allocate_multi_mob_optimized(
         if n_cohorts_actual > 0:
             print(f"   📥 Lấy actual data từ df_raw...")
             
+            # DEBUG: Kiểm tra df_raw có các cột cần thiết không
+            print(f"   🔍 DEBUG: Kiểm tra df_raw columns...")
+            print(f"      df_raw shape: {df_raw.shape}")
+            print(f"      loan_col ({loan_col}): {loan_col in df_raw.columns}")
+            print(f"      CFG['state'] ({CFG['state']}): {CFG['state'] in df_raw.columns}")
+            print(f"      CFG['ead'] ({CFG['ead']}): {CFG['ead'] in df_raw.columns}")
+            print(f"      CFG['mob'] ({CFG['mob']}): {CFG['mob'] in df_raw.columns}")
+            
             # Lọc df_raw @ target_mob
             df_raw_target = df_raw[df_raw[CFG['mob']] == target_mob].copy()
+            print(f"      df_raw_target shape after filter: {df_raw_target.shape}")
+            
+            # Kiểm tra sau khi filter
+            print(f"      STATE_MODEL in df_raw_target: {CFG['state'] in df_raw_target.columns}")
+            
             df_raw_target['VINTAGE_DATE'] = parse_date_column(df_raw_target[CFG['orig_date']])
             
-            # Kiểm tra các cột cần thiết có trong df_raw không
+            # Kiểm tra các cột cần thiết có trong df_raw_target không
             required_cols = [loan_col, CFG['state'], CFG['ead'], 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']
             missing_cols = [col for col in required_cols if col not in df_raw_target.columns]
             
             if missing_cols:
-                print(f"   ⚠️ WARNING: df_raw thiếu các cột: {missing_cols}")
+                print(f"   ⚠️ WARNING: df_raw_target thiếu các cột: {missing_cols}")
+                print(f"   ⚠️ Available columns: {df_raw_target.columns.tolist()[:20]}")
                 print(f"   ⚠️ Bỏ qua lấy actual data, sẽ allocate cho tất cả")
             else:
                 # Lấy danh sách cohorts actual
@@ -165,6 +179,8 @@ def allocate_multi_mob_optimized(
                     on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
                     how='inner'
                 )
+                
+                print(f"      df_raw_actual shape: {df_raw_actual.shape}")
                 
                 if len(df_raw_actual) > 0:
                     # Lấy actual data từ df_raw
