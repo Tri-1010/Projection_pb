@@ -68,6 +68,12 @@ def allocate_multi_mob_optimized(
     loan_col = CFG["loan"]
     
     print(f"🎯 Phân bổ forecast TỐI ƯU tại {len(target_mobs)} MOB: {target_mobs}")
+    print(f"   📋 CFG mapping:")
+    print(f"      loan: {CFG['loan']}")
+    print(f"      state: {CFG['state']}")
+    print(f"      ead: {CFG['ead']}")
+    print(f"      mob: {CFG['mob']}")
+    print(f"      orig_date: {CFG.get('orig_date', 'DISBURSAL_DATE')}")
     
     df = df_loans_latest.copy()
     
@@ -142,68 +148,88 @@ def allocate_multi_mob_optimized(
             df_raw_target = df_raw[df_raw[CFG['mob']] == target_mob].copy()
             df_raw_target['VINTAGE_DATE'] = parse_date_column(df_raw_target[CFG['orig_date']])
             
-            # Merge với loan_info để lấy loans thuộc cohorts actual
-            df_raw_target_merged = loan_info.merge(
-                df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']],
-                on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
-                how='inner'
-            )
+            # Kiểm tra các cột cần thiết có trong df_raw không
+            required_cols = [loan_col, CFG['state'], CFG['ead'], 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']
+            missing_cols = [col for col in required_cols if col not in df_raw_target.columns]
             
-            if len(df_raw_target_merged) > 0:
-                # Lấy actual data từ df_raw
-                df_actual_mob = df_raw_target[[
-                    loan_col, CFG['state'], CFG['ead']
-                ]].copy()
+            if missing_cols:
+                print(f"   ⚠️ WARNING: df_raw thiếu các cột: {missing_cols}")
+                print(f"   ⚠️ Bỏ qua lấy actual data, sẽ allocate cho tất cả")
+            else:
+                # Lấy danh sách cohorts actual
+                actual_cohorts = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']].drop_duplicates()
                 
-                df_actual_mob = df_actual_mob.rename(columns={
-                    CFG['state']: f'STATE_FORECAST_MOB{target_mob}',
-                    CFG['ead']: f'EAD_FORECAST_MOB{target_mob}',
-                })
-                
-                # Merge vào loan_info
-                loan_info = loan_info.merge(
-                    df_actual_mob,
-                    on=loan_col,
-                    how='left'
-                )
-                
-                # Tính DEL metrics cho actual
-                if include_del30:
-                    loan_info[f'DEL30_FLAG_MOB{target_mob}'] = loan_info[f'STATE_FORECAST_MOB{target_mob}'].isin(BUCKETS_30P).astype(int)
-                if include_del90:
-                    loan_info[f'DEL90_FLAG_MOB{target_mob}'] = loan_info[f'STATE_FORECAST_MOB{target_mob}'].isin(BUCKETS_90P).astype(int)
-                
-                # Lấy PROB_DEL từ lifecycle
-                df_del_rates = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']].copy()
-                if 'DEL30_PCT' in df_lc_actual.columns:
-                    df_del_rates['DEL30_PCT'] = df_lc_actual['DEL30_PCT']
-                if 'DEL90_PCT' in df_lc_actual.columns:
-                    df_del_rates['DEL90_PCT'] = df_lc_actual['DEL90_PCT']
-                
-                # Merge DEL rates (chỉ cho loans thuộc actual cohorts)
-                loan_info_actual_mask = loan_info[loan_col].isin(df_raw_target_merged[loan_col])
-                
-                loan_info_actual = loan_info[loan_info_actual_mask].merge(
-                    df_del_rates,
+                # Lọc df_raw_target chỉ lấy loans thuộc actual cohorts
+                df_raw_actual = df_raw_target.merge(
+                    actual_cohorts,
                     on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
-                    how='left'
+                    how='inner'
                 )
                 
-                if include_del30 and 'DEL30_PCT' in loan_info_actual.columns:
-                    loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}'] = loan_info_actual['DEL30_PCT'].fillna(0)
-                    loan_info.loc[loan_info_actual_mask, f'EAD_DEL30_MOB{target_mob}'] = (
-                        loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'] * 
-                        loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}']
+                if len(df_raw_actual) > 0:
+                    # Lấy actual data từ df_raw
+                    df_actual_mob = df_raw_actual[[
+                        loan_col, CFG['state'], CFG['ead']
+                    ]].copy()
+                    
+                    df_actual_mob = df_actual_mob.rename(columns={
+                        CFG['state']: f'STATE_FORECAST_MOB{target_mob}',
+                        CFG['ead']: f'EAD_FORECAST_MOB{target_mob}',
+                    })
+                    
+                    # Merge vào loan_info
+                    loan_info = loan_info.merge(
+                        df_actual_mob,
+                        on=loan_col,
+                        how='left'
                     )
-                
-                if include_del90 and 'DEL90_PCT' in loan_info_actual.columns:
-                    loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}'] = loan_info_actual['DEL90_PCT'].fillna(0)
-                    loan_info.loc[loan_info_actual_mask, f'EAD_DEL90_MOB{target_mob}'] = (
-                        loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'] * 
-                        loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}']
-                    )
-                
-                print(f"      ✅ Lấy actual cho {len(df_raw_target_merged):,} loans")
+                    
+                    # Tính DEL metrics cho actual
+                    if include_del30:
+                        mask = loan_info[f'STATE_FORECAST_MOB{target_mob}'].notna()
+                        loan_info.loc[mask, f'DEL30_FLAG_MOB{target_mob}'] = (
+                            loan_info.loc[mask, f'STATE_FORECAST_MOB{target_mob}'].isin(BUCKETS_30P).astype(int)
+                        )
+                    if include_del90:
+                        mask = loan_info[f'STATE_FORECAST_MOB{target_mob}'].notna()
+                        loan_info.loc[mask, f'DEL90_FLAG_MOB{target_mob}'] = (
+                            loan_info.loc[mask, f'STATE_FORECAST_MOB{target_mob}'].isin(BUCKETS_90P).astype(int)
+                        )
+                    
+                    # Lấy PROB_DEL từ lifecycle
+                    df_del_rates = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']].copy()
+                    if 'DEL30_PCT' in df_lc_actual.columns:
+                        df_del_rates['DEL30_PCT'] = df_lc_actual['DEL30_PCT']
+                    if 'DEL90_PCT' in df_lc_actual.columns:
+                        df_del_rates['DEL90_PCT'] = df_lc_actual['DEL90_PCT']
+                    
+                    # Merge DEL rates (chỉ cho loans có actual data)
+                    loan_info_actual_mask = loan_info[f'STATE_FORECAST_MOB{target_mob}'].notna()
+                    
+                    if loan_info_actual_mask.sum() > 0:
+                        loan_info_actual = loan_info[loan_info_actual_mask].merge(
+                            df_del_rates,
+                            on=['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE'],
+                            how='left'
+                        )
+                        
+                        if include_del30 and 'DEL30_PCT' in loan_info_actual.columns:
+                            loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}'] = loan_info_actual['DEL30_PCT'].fillna(0).values
+                            loan_info.loc[loan_info_actual_mask, f'EAD_DEL30_MOB{target_mob}'] = (
+                                loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'].values * 
+                                loan_info.loc[loan_info_actual_mask, f'PROB_DEL30_MOB{target_mob}'].values
+                            )
+                        
+                        if include_del90 and 'DEL90_PCT' in loan_info_actual.columns:
+                            loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}'] = loan_info_actual['DEL90_PCT'].fillna(0).values
+                            loan_info.loc[loan_info_actual_mask, f'EAD_DEL90_MOB{target_mob}'] = (
+                                loan_info.loc[loan_info_actual_mask, 'DISBURSAL_AMOUNT'].values * 
+                                loan_info.loc[loan_info_actual_mask, f'PROB_DEL90_MOB{target_mob}'].values
+                            )
+                    
+                    print(f"      ✅ Lấy actual cho {len(df_raw_actual):,} loans")
+                else:
+                    print(f"      ⚠️ Không tìm thấy loans thuộc actual cohorts trong df_raw")
         
         # ===================================================
         # BƯỚC 3: Allocate cho cohorts forecast
