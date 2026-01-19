@@ -17,10 +17,19 @@ Copy code từ file `export_2025_10_and_2025_01.py` vào cell mới:
 ```python
 from export_cohort_details import export_cohort_forecast_details
 import pandas as pd
+from src.config import parse_date_column
 
 print("="*60)
 print("📊 EXPORT COHORTS: 2025-10 và 2025-01")
 print("="*60)
+
+# Tạo VINTAGE_DATE nếu chưa có
+if 'VINTAGE_DATE' not in df_raw.columns:
+    print("⚠️  Creating VINTAGE_DATE...")
+    df_raw['VINTAGE_DATE'] = parse_date_column(df_raw['DISBURSAL_DATE'])
+    print("✅ VINTAGE_DATE created")
+else:
+    df_raw['VINTAGE_DATE'] = pd.to_datetime(df_raw['VINTAGE_DATE'])
 
 # Tìm tất cả cohorts
 target_months = ['2025-10-01', '2025-01-01']

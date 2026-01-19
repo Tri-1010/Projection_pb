@@ -11,10 +11,19 @@
 
 from export_cohort_details import export_cohort_forecast_details
 import pandas as pd
+from src.config import parse_date_column
 
 print("="*60)
 print("🔍 TÌM TẤT CẢ COHORTS CHO THÁNG 2025-10 VÀ 2025-01")
 print("="*60)
+
+# Tạo VINTAGE_DATE nếu chưa có
+if 'VINTAGE_DATE' not in df_raw.columns:
+    print("⚠️  Creating VINTAGE_DATE from DISBURSAL_DATE...")
+    df_raw['VINTAGE_DATE'] = parse_date_column(df_raw['DISBURSAL_DATE'])
+    print("✅ VINTAGE_DATE created")
+else:
+    df_raw['VINTAGE_DATE'] = pd.to_datetime(df_raw['VINTAGE_DATE'])
 
 # Target months
 target_months = ['2025-10-01', '2025-01-01']

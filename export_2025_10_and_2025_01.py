@@ -9,10 +9,23 @@ Copy toàn bộ code này vào 1 cell mới trong notebook Final_Workflow copy
 
 from export_cohort_details import export_cohort_forecast_details
 import pandas as pd
+from src.config import parse_date_column
 
 print("="*60)
 print("📊 EXPORT COHORTS: 2025-10 và 2025-01")
 print("="*60)
+
+# ============================
+# 0. TẠO VINTAGE_DATE NẾU CHƯA CÓ
+# ============================
+
+if 'VINTAGE_DATE' not in df_raw.columns:
+    print("⚠️  Creating VINTAGE_DATE from DISBURSAL_DATE...")
+    df_raw['VINTAGE_DATE'] = parse_date_column(df_raw['DISBURSAL_DATE'])
+    print("✅ VINTAGE_DATE created")
+else:
+    # Ensure datetime format
+    df_raw['VINTAGE_DATE'] = pd.to_datetime(df_raw['VINTAGE_DATE'])
 
 # ============================
 # 1. TÌM TẤT CẢ COHORTS
