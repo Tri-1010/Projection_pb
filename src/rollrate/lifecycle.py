@@ -251,9 +251,14 @@ def add_del_metrics(df_lifecycle: pd.DataFrame, df_raw: pd.DataFrame | None = No
     # ===================================================
     # 2️⃣ Tính DEL30/60/90 AMOUNT
     # ===================================================
-    df["DEL30_AMT"] = df[BUCKETS_30P].sum(axis=1)
-    df["DEL60_AMT"] = df[BUCKETS_60P].sum(axis=1)
-    df["DEL90_AMT"] = df[BUCKETS_90P].sum(axis=1)
+    # Filter chỉ lấy các buckets có trong DataFrame (tránh KeyError)
+    buckets_30p_exist = [c for c in BUCKETS_30P if c in df.columns]
+    buckets_60p_exist = [c for c in BUCKETS_60P if c in df.columns]
+    buckets_90p_exist = [c for c in BUCKETS_90P if c in df.columns]
+    
+    df["DEL30_AMT"] = df[buckets_30p_exist].sum(axis=1) if buckets_30p_exist else 0
+    df["DEL60_AMT"] = df[buckets_60p_exist].sum(axis=1) if buckets_60p_exist else 0
+    df["DEL90_AMT"] = df[buckets_90p_exist].sum(axis=1) if buckets_90p_exist else 0
 
     # ===================================================
     # 3️⃣ Tính % trên DISB_TOTAL

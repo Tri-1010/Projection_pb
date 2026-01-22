@@ -70,6 +70,15 @@ def parse_date_column(series):
 # ===========================
 MIN_OBS = 100         # Số quan sát tối thiểu
 MIN_EAD = 1e2         # Tổng dư nợ tối thiểu để build transition
+
+# === K VALUE CONFIG ===
+# K_POST_MATURE: Giá trị K sử dụng cho MOB > TARGET_MOB (sau khi mature)
+# - Nếu K_POST_MATURE = None: Sử dụng K từ calibration (k_final_by_mob)
+# - Nếu K_POST_MATURE = 0.3: Sử dụng K = 0.3 cho tất cả MOB > TARGET_MOB
+# - Giá trị khuyến nghị: 0.3 - 0.5 (để giảm slope sau mature)
+K_POST_MATURE = 0.03   # K value cho MOB > TARGET_MOB (None = dùng calibrated K)
+# === BUCKETS CONFIG ===
+# Khai báo đầy đủ các buckets - code sẽ tự động filter chỉ lấy các cột có trong data
 BUCKETS_30P = ["DPD30+", "DPD60+", "DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
 BUCKETS_60P = ["DPD60+", "DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
 BUCKETS_90P = ["DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
@@ -95,8 +104,8 @@ CFG = dict(
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"] => giữ nguyên RISK_SCORE từ data
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"] => RISK_SCORE = "RISK_SCORE_GENDER"
 #SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"] => RISK_SCORE = "RISK_SCORE_GENDER_LA_GROUP"
-SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]  # Mặc định: giữ nguyên RISK_SCORE từ data
-#SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"]
+#SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]  # Mặc định: giữ nguyên RISK_SCORE từ data
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]
 def get_cohort_cols():
     """Trả về list columns để định nghĩa 1 cohort: SEGMENT_COLS + VINTAGE_DATE"""
     return ["PRODUCT_TYPE", "RISK_SCORE", "VINTAGE_DATE"]
@@ -158,7 +167,7 @@ ALPHA_SMOOTH = 0.5
 
 # === STATE DEFINITIONS ===
 BUCKETS_CANON = [
-    "DPD0", "DPD1+", "DPD30+", "DPD60+", "DPD90+", "DPD120+", "DPD180+",
+    "DPD0", "DPD1+", "DPD30+", "DPD60+", "DPD90+",
     "PREPAY", "WRITEOFF", "SOLDOUT"
 ]
 
@@ -170,9 +179,9 @@ DEFAULT = {"DPD90+"}
 # === MODEL CONFIG ===
 WEIGHT_METHOD = "exp"
 #WEIGHT_METHOD = None
-ROLL_WINDOW = 10
+ROLL_WINDOW = 12
 CFG["ROLL_WINDOW"] = ROLL_WINDOW
-DECAY_LAMBDA = 0.5 ** (1/10)
+DECAY_LAMBDA = 0.5 ** (1/12)
 CFG["DECAY_LAMBDA"] = DECAY_LAMBDA
 # === MACRO & COLLX ADJUSTMENT CONFIG (optional, not wired by default) ===
 MACRO_INDICATORS = {

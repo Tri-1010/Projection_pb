@@ -63,6 +63,17 @@ print(f"{'='*60}")
 if len(all_cohorts) > 0:
     print(f"\n📤 Exporting {len(all_cohorts)} cohorts...")
     
+    # Create alpha_by_mob if it doesn't exist (use single alpha value for all MOBs)
+    if 'alpha_by_mob' not in globals():
+        if 'alpha' in globals():
+            # Use single alpha value for all MOBs
+            alpha_by_mob = {mob: alpha for mob in k_raw_by_mob.keys()}
+            print(f"   ℹ️  Created alpha_by_mob from single alpha value: {alpha:.4f}")
+        else:
+            # Default alpha = 0.5 if not available
+            alpha_by_mob = {mob: 0.5 for mob in k_raw_by_mob.keys()}
+            print(f"   ⚠️  Alpha not found, using default: 0.5")
+    
     filename = export_cohort_forecast_details(
         cohorts=all_cohorts,
         df_raw=df_raw,
