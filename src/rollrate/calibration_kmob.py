@@ -663,9 +663,17 @@ def fit_alpha_segmented(
         best_alpha = 1.0
     k_final = {m: float(np.clip(best_alpha * k, 0.0, 1.0)) for m, k in k_smooth_by_mob.items()}
     
+    # Apply K_GLOBAL_MULTIPLIER từ config nếu được cấu hình
+    # K_GLOBAL_MULTIPLIER: Hệ số nhân chung cho tất cả K values
+    # Mục đích: Điều chỉnh tổng thể tốc độ forecast (tăng/giảm đồng đều)
+    from src.config import K_GLOBAL_MULTIPLIER
+    if K_GLOBAL_MULTIPLIER is not None and K_GLOBAL_MULTIPLIER != 1.0:
+        k_final = {m: float(np.clip(k * K_GLOBAL_MULTIPLIER, 0.0, 1.0)) for m, k in k_final.items()}
+    
     # Apply K_POST_MATURE từ config nếu được cấu hình
     # K_POST_MATURE: Giá trị K cố định cho MOB >= mob_target
     # Mục đích: Giảm slope của DEL curve sau khi mature
+    # Lưu ý: K_POST_MATURE được áp dụng SAU K_GLOBAL_MULTIPLIER
     from src.config import K_POST_MATURE
     if K_POST_MATURE is not None:
         for mob in range(mob_target, max(k_final.keys()) + 1 if k_final else mob_target + 1):

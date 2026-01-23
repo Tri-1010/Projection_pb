@@ -72,11 +72,19 @@ MIN_OBS = 100         # Số quan sát tối thiểu
 MIN_EAD = 1e2         # Tổng dư nợ tối thiểu để build transition
 
 # === K VALUE CONFIG ===
-# K_POST_MATURE: Giá trị K sử dụng cho MOB > TARGET_MOB (sau khi mature)
+# K_GLOBAL_MULTIPLIER: Hệ số nhân chung cho tất cả k_final_by_mob
+# - Nếu K_GLOBAL_MULTIPLIER = 1.0: Không thay đổi (mặc định)
+# - Nếu K_GLOBAL_MULTIPLIER = 0.8: Giảm 20% tất cả K values → forecast tăng chậm hơn
+# - Nếu K_GLOBAL_MULTIPLIER = 1.2: Tăng 20% tất cả K values → forecast tăng nhanh hơn
+# - Công thức: k_adjusted = k_calibrated * K_GLOBAL_MULTIPLIER (clip to [0, 1])
+K_GLOBAL_MULTIPLIER = 0.8  # Hệ số nhân chung (1.0 = không thay đổi)
+
+# K_POST_MATURE: Giá trị K sử dụng cho MOB >= TARGET_MOB (sau khi mature)
 # - Nếu K_POST_MATURE = None: Sử dụng K từ calibration (k_final_by_mob)
-# - Nếu K_POST_MATURE = 0.3: Sử dụng K = 0.3 cho tất cả MOB > TARGET_MOB
+# - Nếu K_POST_MATURE = 0.3: Sử dụng K = 0.3 cho tất cả MOB >= TARGET_MOB
 # - Giá trị khuyến nghị: 0.3 - 0.5 (để giảm slope sau mature)
-K_POST_MATURE = 0.03   # K value cho MOB > TARGET_MOB (None = dùng calibrated K)
+# - Lưu ý: K_POST_MATURE được áp dụng SAU K_GLOBAL_MULTIPLIER
+K_POST_MATURE = 0.03   # K value cho MOB >= TARGET_MOB (None = dùng calibrated K)
 # === BUCKETS CONFIG ===
 # Khai báo đầy đủ các buckets - code sẽ tự động filter chỉ lấy các cột có trong data
 BUCKETS_30P = ["DPD30+", "DPD60+", "DPD90+", "DPD120+", "DPD180+", "WRITEOFF"]
@@ -105,7 +113,7 @@ CFG = dict(
 # - SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER"] => RISK_SCORE = "RISK_SCORE_GENDER"
 #SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"] => RISK_SCORE = "RISK_SCORE_GENDER_LA_GROUP"
 #SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]  # Mặc định: giữ nguyên RISK_SCORE từ data
-SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE", "GENDER", "LA_GROUP"]
+SEGMENT_COLS = ["PRODUCT_TYPE", "RISK_SCORE"]
 def get_cohort_cols():
     """Trả về list columns để định nghĩa 1 cohort: SEGMENT_COLS + VINTAGE_DATE"""
     return ["PRODUCT_TYPE", "RISK_SCORE", "VINTAGE_DATE"]
