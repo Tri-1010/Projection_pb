@@ -508,7 +508,7 @@ def allocate_ultra_fast(
     
     output_cols = [
         loan_col, 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE',
-        'DISBURSAL_AMOUNT',
+        'DISBURSAL_AMOUNT', 'SALE_CHANNEL',
         'STATE_CURRENT', 'MOB_CURRENT', 'EAD_CURRENT',
         'STATE_FORECAST', 'EAD_FORECAST',
         'PROB_DEL30', 'PROB_DEL90',
@@ -593,7 +593,7 @@ def allocate_multi_mob_ultra_fast(
         CFG["mob"], CFG["ead"], CFG["state"]
     ]
     
-    # Thêm DISBURSAL_DATE, DISBURSAL_AMOUNT nếu có
+    # Thêm DISBURSAL_DATE, DISBURSAL_AMOUNT, SALE_CHANNEL nếu có
     orig_date_col = CFG.get("orig_date", "DISBURSAL_DATE")
     disb_amt_col = CFG.get("disb", "DISBURSAL_AMOUNT")
     
@@ -601,6 +601,8 @@ def allocate_multi_mob_ultra_fast(
         base_cols.append(orig_date_col)
     if disb_amt_col in df.columns:
         base_cols.append(disb_amt_col)
+    if 'SALE_CHANNEL' in df.columns:
+        base_cols.append('SALE_CHANNEL')
     
     # Loại bỏ duplicate columns
     base_cols = list(dict.fromkeys(base_cols))
