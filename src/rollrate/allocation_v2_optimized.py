@@ -17,7 +17,12 @@ from typing import Dict, List, Optional
 from src.config import CFG, BUCKETS_CANON, BUCKETS_30P, BUCKETS_60P, BUCKETS_90P, parse_date_column
 
 # Import hàm allocate_multi_mob_fast từ allocation_v2_fast
-from src.rollrate.allocation_v2_fast import allocate_multi_mob_fast
+#from src.rollrate.allocation_v2_fast import allocate_multi_mob_fast
+# Thay vì:
+#from src.rollrate.allocation_v2_fast import allocate_multi_mob_fast
+
+# Dùng:
+from src.rollrate.allocation_v2_ultra_fast import allocate_multi_mob_ultra_fast
 
 
 def _get_actual_loans_at_mob(
