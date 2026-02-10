@@ -65,6 +65,142 @@ def _get_combined_matrix(
     return combined
 
 
+def _get_actual_loans_at_mob(
+    df_raw: pd.DataFrame,
+    product: str,
+    score: str,
+    vintage_date: pd.Timestamp,
+    target_mob: int,
+) -> Optional[pd.DataFrame]:
+    """
+    Lấy actual loan-level data từ df_raw tại MOB cụ thể.
+    """
+    loan_col = CFG["loan"]
+    mob_col = CFG["mob"]
+    state_col = CFG["state"]
+    ead_col = CFG["ead"]
+    orig_date_col = CFG.get("orig_date", "DISBURSAL_DATE")
+    disb_col = CFG.get("disb", "DISBURSAL_AMOUNT")
+    
+    df_raw_copy = df_raw.copy()
+    if 'VINTAGE_DATE' not in df_raw_copy.columns:
+        df_raw_copy['VINTAGE_DATE'] = parse_date_column(df_raw_copy[orig_date_col])
+    else:
+        df_raw_copy['VINTAGE_DATE'] = pd.to_datetime(df_raw_copy['VINTAGE_DATE'])
+    
+    mask = (
+        (df_raw_copy['PRODUCT_TYPE'] == product) &
+        (df_raw_copy['RISK_SCORE'] == score) &
+        (df_raw_copy['VINTAGE_DATE'] == vintage_date)
+    )
+    df_cohort = df_raw_copy[mask]
+    
+    if len(df_cohort) == 0:
+        return None
+    
+    df_at_mob = df_cohort[df_cohort[mob_col] == target_mob]
+    
+    if len(df_at_mob) == 0:
+        return None
+    
+    output_cols = [loan_col, 'PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']
+    
+    if state_col in df_at_mob.columns:
+        output_cols.append(state_col)
+    if ead_col in df_at_mob.columns:
+        output_cols.append(ead_col)
+    if disb_col in df_at_mob.columns:
+        output_cols.append(disb_col)
+    
+    df_result = df_at_mob[[c for c in output_cols if c in df_at_mob.columns]].copy()
+    
+    rename_map = {}
+    if state_col in df_result.columns:
+        rename_map[state_col] = 'STATE_ACTUAL'
+    if ead_col in df_result.columns:
+        rename_map[ead_col] = 'EAD_ACTUAL'
+    if disb_col in df_result.columns and disb_col != 'DISBURSAL_AMOUNT':
+        rename_map[disb_col] = 'DISBURSAL_AMOUNT'
+    
+    df_result = df_result.rename(columns=rename_map)
+    
+    return df_result
+
+
+def _extract_actual_loans_for_mob(
+    df_raw: pd.DataFrame,
+    df_lifecycle_final: pd.DataFrame,
+    target_mob: int,
+) -> pd.DataFrame:
+    """
+    Lấy tất cả actual loans từ df_raw cho các cohorts có actual @ target_mob.
+    """
+    loan_col = CFG["loan"]
+    
+    print(f"   📊 Extracting actual loans @ MOB {target_mob} from df_raw...")
+    
+    df_lc_actual = df_lifecycle_final[
+        (df_lifecycle_final['MOB'] == target_mob) &
+        (df_lifecycle_final['IS_FORECAST'] == 0)
+    ].copy()
+    
+    if len(df_lc_actual) == 0:
+        print(f"      ⚠️  No actual cohorts @ MOB {target_mob}")
+        return pd.DataFrame()
+    
+    cohorts_with_actual = df_lc_actual[['PRODUCT_TYPE', 'RISK_SCORE', 'VINTAGE_DATE']].drop_duplicates()
+    
+    print(f"      Found {len(cohorts_with_actual)} cohorts with actual data")
+    
+    actual_loans_list = []
+    
+    for _, row in cohorts_with_actual.iterrows():
+        product = row['PRODUCT_TYPE']
+        score = row['RISK_SCORE']
+        vintage_date = pd.to_datetime(row['VINTAGE_DATE'])
+        
+        df_actual = _get_actual_loans_at_mob(
+            df_raw=df_raw,
+            product=product,
+            score=score,
+            vintage_date=vintage_date,
+            target_mob=target_mob,
+        )
+        
+        if df_actual is not None and len(df_actual) > 0:
+            actual_loans_list.append(df_actual)
+    
+    if not actual_loans_list:
+        print(f"      ⚠️  No actual loans found in df_raw")
+        return pd.DataFrame()
+    
+    df_all_actual = pd.concat(actual_loans_list, ignore_index=True)
+    df_all_actual['IS_ACTUAL'] = 1
+    
+    print(f"      ✅ Extracted {len(df_all_actual):,} actual loans")
+    
+    return df_all_actual
+
+
+def _get_cohorts_needing_allocation(
+    df_loans_latest: pd.DataFrame,
+    df_actual_loans: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Lọc ra các loans cần allocate (không có trong actual).
+    """
+    loan_col = CFG["loan"]
+    
+    if len(df_actual_loans) == 0:
+        return df_loans_latest
+    
+    actual_loan_ids = set(df_actual_loans[loan_col].unique())
+    mask = ~df_loans_latest[loan_col].isin(actual_loan_ids)
+    df_need_allocation = df_loans_latest[mask].copy()
+    
+    return df_need_allocation
+
+
 def allocate_ultra_fast(
     df_loans_latest: pd.DataFrame,
     df_lifecycle_final: pd.DataFrame,
@@ -351,21 +487,36 @@ def allocate_multi_mob_ultra_fast(
     matrices_by_mob: Dict,
     target_mobs: List[int] = [12, 24],
     parent_fallback: Dict = None,
+    df_raw: Optional[pd.DataFrame] = None,
     include_del30: bool = True,
     include_del90: bool = True,
     seed: int = 42,
 ) -> pd.DataFrame:
     """
-    Phân bổ forecast tại NHIỀU MOB (ULTRA FAST).
+    Phân bổ forecast tại NHIỀU MOB (ULTRA FAST) với hỗ trợ ACTUAL DATA.
+    
+    TỐI ƯU:
+    - Cohort có actual @ target_mob: Lấy thực tế từ df_raw ✅
+    - Cohort chỉ có forecast @ target_mob: Mới allocate ✅
     
     Performance: 10-15x faster than allocate_multi_mob_fast()
     
-    OUTPUT: Giống hệt allocate_multi_mob_fast()
+    Parameters
+    ----------
+    df_raw : Optional[pd.DataFrame]
+        Data gốc đầy đủ (có cả actual data). Nếu None, chỉ allocate forecast.
+    
+    OUTPUT: Giống hệt allocate_multi_mob_optimized()
     """
     
     loan_col = CFG["loan"]
     
-    print(f"🎯 Phân bổ forecast tại {len(target_mobs)} MOB: {target_mobs} (ULTRA FAST)")
+    if df_raw is not None:
+        print(f"🎯 Phân bổ forecast TỐI ƯU tại {len(target_mobs)} MOB: {target_mobs} (ULTRA FAST)")
+        print(f"   ✅ Lấy actual từ df_raw khi có")
+        print(f"   ✅ Allocate forecast khi cần")
+    else:
+        print(f"🎯 Phân bổ forecast tại {len(target_mobs)} MOB: {target_mobs} (ULTRA FAST)")
     
     df = df_loans_latest.copy()
     
@@ -407,18 +558,93 @@ def allocate_multi_mob_ultra_fast(
     loan_info = loan_info.rename(columns=rename_map)
     
     for target_mob in target_mobs:
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
+        print(f"📍 Processing MOB {target_mob}")
+        print(f"{'='*60}")
         
-        df_allocated = allocate_ultra_fast(
-            df_loans_latest=df_loans_latest,
-            df_lifecycle_final=df_lifecycle_final,
-            matrices_by_mob=matrices_by_mob,
-            target_mob=target_mob,
-            parent_fallback=parent_fallback,
-            seed=seed,
-        )
+        # BƯỚC 1: Lấy actual loans từ df_raw (nếu có)
+        df_actual = pd.DataFrame()
+        if df_raw is not None:
+            df_actual = _extract_actual_loans_for_mob(
+                df_raw=df_raw,
+                df_lifecycle_final=df_lifecycle_final,
+                target_mob=target_mob,
+            )
         
-        if df_allocated.empty:
+        n_actual = len(df_actual)
+        n_total = len(df_loans_latest)
+        
+        # BƯỚC 2: Xác định loans cần allocate
+        if n_actual > 0:
+            df_need_allocation = _get_cohorts_needing_allocation(
+                df_loans_latest=df_loans_latest,
+                df_actual_loans=df_actual,
+            )
+            n_need_allocation = len(df_need_allocation)
+            
+            print(f"\n   📊 Split:")
+            print(f"      Actual loans: {n_actual:,} ({n_actual/n_total*100:.1f}%)")
+            print(f"      Need allocation: {n_need_allocation:,} ({n_need_allocation/n_total*100:.1f}%)")
+        else:
+            df_need_allocation = df_loans_latest
+            n_need_allocation = n_total
+            print(f"\n   📊 All loans need allocation: {n_need_allocation:,}")
+        
+        # BƯỚC 3: Allocate forecast cho loans cần allocate
+        df_allocated = pd.DataFrame()
+        if n_need_allocation > 0:
+            print(f"\n   🔄 Allocating forecast for {n_need_allocation:,} loans...")
+            df_allocated = allocate_ultra_fast(
+                df_loans_latest=df_need_allocation,
+                df_lifecycle_final=df_lifecycle_final,
+                matrices_by_mob=matrices_by_mob,
+                target_mob=target_mob,
+                parent_fallback=parent_fallback,
+                seed=seed,
+            )
+        
+        # BƯỚC 4: Combine actual + forecast
+        if n_actual > 0 and not df_allocated.empty:
+            # Rename actual columns to match forecast format
+            df_actual_renamed = df_actual.copy()
+            df_actual_renamed = df_actual_renamed.rename(columns={
+                'STATE_ACTUAL': 'STATE_FORECAST',
+                'EAD_ACTUAL': 'EAD_FORECAST',
+            })
+            
+            # Thêm các cột DEL nếu cần (set = 0 cho actual vì đã biết state)
+            if include_del30:
+                df_actual_renamed['PROB_DEL30'] = 0.0
+                df_actual_renamed['EAD_DEL30'] = 0.0
+                df_actual_renamed['DEL30_FLAG'] = 0
+            if include_del90:
+                df_actual_renamed['PROB_DEL90'] = 0.0
+                df_actual_renamed['EAD_DEL90'] = 0.0
+                df_actual_renamed['DEL90_FLAG'] = 0
+            
+            # Combine
+            df_combined = pd.concat([df_actual_renamed, df_allocated], ignore_index=True)
+            print(f"\n   ✅ Combined: {len(df_combined):,} loans (actual: {n_actual:,}, forecast: {len(df_allocated):,})")
+        elif n_actual > 0:
+            df_combined = df_actual.copy()
+            df_combined = df_combined.rename(columns={
+                'STATE_ACTUAL': 'STATE_FORECAST',
+                'EAD_ACTUAL': 'EAD_FORECAST',
+            })
+            if include_del30:
+                df_combined['PROB_DEL30'] = 0.0
+                df_combined['EAD_DEL30'] = 0.0
+                df_combined['DEL30_FLAG'] = 0
+            if include_del90:
+                df_combined['PROB_DEL90'] = 0.0
+                df_combined['EAD_DEL90'] = 0.0
+                df_combined['DEL90_FLAG'] = 0
+            print(f"\n   ✅ All actual: {len(df_combined):,} loans")
+        else:
+            df_combined = df_allocated
+            print(f"\n   ✅ All forecast: {len(df_combined):,} loans")
+        
+        if df_combined.empty:
             continue
         
         # Columns to merge
@@ -429,7 +655,7 @@ def allocate_multi_mob_ultra_fast(
         if include_del90:
             cols_to_merge.extend(['PROB_DEL90', 'EAD_DEL90', 'DEL90_FLAG'])
         
-        df_mob = df_allocated[[c for c in cols_to_merge if c in df_allocated.columns]].copy()
+        df_mob = df_combined[[c for c in cols_to_merge if c in df_combined.columns]].copy()
         
         # Rename với suffix _MOB{X}
         rename_map = {
