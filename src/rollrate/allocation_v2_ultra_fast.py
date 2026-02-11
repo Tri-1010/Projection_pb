@@ -678,15 +678,20 @@ def allocate_multi_mob_ultra_fast(
                 'EAD_ACTUAL': 'EAD_FORECAST',
             })
             
-            # Thêm các cột DEL nếu cần (set = 0 cho actual vì đã biết state)
+            # Tính DEL cho actual data dựa trên state thực tế
             if include_del30:
-                df_actual_renamed['PROB_DEL30'] = 0.0
-                df_actual_renamed['EAD_DEL30'] = 0.0
-                df_actual_renamed['DEL30_FLAG'] = 0
+                # DEL30: DPD30+, DPD60+, DPD90+, WRITEOFF
+                del30_states = ['DPD30+', 'DPD60+', 'DPD90+', 'WRITEOFF']
+                df_actual_renamed['DEL30_FLAG'] = df_actual_renamed['STATE_FORECAST'].isin(del30_states).astype(int)
+                df_actual_renamed['PROB_DEL30'] = df_actual_renamed['DEL30_FLAG'].astype(float)
+                df_actual_renamed['EAD_DEL30'] = df_actual_renamed['EAD_FORECAST'] * df_actual_renamed['DEL30_FLAG']
+            
             if include_del90:
-                df_actual_renamed['PROB_DEL90'] = 0.0
-                df_actual_renamed['EAD_DEL90'] = 0.0
-                df_actual_renamed['DEL90_FLAG'] = 0
+                # DEL90: DPD90+, WRITEOFF
+                del90_states = ['DPD90+', 'WRITEOFF']
+                df_actual_renamed['DEL90_FLAG'] = df_actual_renamed['STATE_FORECAST'].isin(del90_states).astype(int)
+                df_actual_renamed['PROB_DEL90'] = df_actual_renamed['DEL90_FLAG'].astype(float)
+                df_actual_renamed['EAD_DEL90'] = df_actual_renamed['EAD_FORECAST'] * df_actual_renamed['DEL90_FLAG']
             
             # Combine
             df_combined = pd.concat([df_actual_renamed, df_allocated], ignore_index=True)
@@ -698,13 +703,18 @@ def allocate_multi_mob_ultra_fast(
                 'EAD_ACTUAL': 'EAD_FORECAST',
             })
             if include_del30:
-                df_combined['PROB_DEL30'] = 0.0
-                df_combined['EAD_DEL30'] = 0.0
-                df_combined['DEL30_FLAG'] = 0
+                # DEL30: DPD30+, DPD60+, DPD90+, WRITEOFF
+                del30_states = ['DPD30+', 'DPD60+', 'DPD90+', 'WRITEOFF']
+                df_combined['DEL30_FLAG'] = df_combined['STATE_FORECAST'].isin(del30_states).astype(int)
+                df_combined['PROB_DEL30'] = df_combined['DEL30_FLAG'].astype(float)
+                df_combined['EAD_DEL30'] = df_combined['EAD_FORECAST'] * df_combined['DEL30_FLAG']
+            
             if include_del90:
-                df_combined['PROB_DEL90'] = 0.0
-                df_combined['EAD_DEL90'] = 0.0
-                df_combined['DEL90_FLAG'] = 0
+                # DEL90: DPD90+, WRITEOFF
+                del90_states = ['DPD90+', 'WRITEOFF']
+                df_combined['DEL90_FLAG'] = df_combined['STATE_FORECAST'].isin(del90_states).astype(int)
+                df_combined['PROB_DEL90'] = df_combined['DEL90_FLAG'].astype(float)
+                df_combined['EAD_DEL90'] = df_combined['EAD_FORECAST'] * df_combined['DEL90_FLAG']
             print(f"\n   ✅ All actual: {len(df_combined):,} loans")
         else:
             df_combined = df_allocated
